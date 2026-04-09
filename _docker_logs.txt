@@ -1,0 +1,17 @@
+﻿2026-04-09 05:49:23,765 [INFO] rbrcs.app: Registered router: Main Gateway Router (192.168.1.1)
+2026-04-09 05:49:23,859 [INFO] apscheduler.scheduler: Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-04-09 05:49:23,860 [INFO] rbrcs.scheduler: Scheduled health check every 10m
+2026-04-09 05:49:23,860 [INFO] apscheduler.scheduler: Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-04-09 05:49:23,860 [INFO] rbrcs.scheduler: Scheduled backup for Main Gateway Router every 30m
+2026-04-09 05:49:23,860 [INFO] apscheduler.scheduler: Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-04-09 05:49:23,860 [INFO] rbrcs.scheduler: Scheduled golden config drift check every 1h
+2026-04-09 05:49:23,863 [INFO] apscheduler.scheduler: Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-04-09 05:49:23,863 [INFO] rbrcs.scheduler: Scheduled retention cleanup daily at 3:00
+2026-04-09 05:49:23,866 [INFO] apscheduler.scheduler: Added job "Router Health Check" to job store "default"
+2026-04-09 05:49:23,867 [INFO] apscheduler.scheduler: Added job "Backup Main Gateway Router" to job store "default"
+2026-04-09 05:49:23,867 [INFO] apscheduler.scheduler: Added job "Golden Config Drift Check" to job store "default"
+2026-04-09 05:49:23,867 [INFO] apscheduler.scheduler: Added job "Retention Cleanup" to job store "default"
+2026-04-09 05:49:23,867 [INFO] apscheduler.scheduler: Scheduler started
+2026-04-09 05:49:23,867 [INFO] rbrcs.scheduler: Scheduler started
+2026-04-09 05:49:23,868 [INFO] rbrcs.app: Starting Waitress Production Server on 0.0.0.0:5000
+2026-04-09 05:49:23,882 [INFO] waitress: Serving on http://0.0.0.0:5000

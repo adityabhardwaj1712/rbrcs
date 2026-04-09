@@ -346,6 +346,159 @@ def favicon():
     svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path></svg>'
     return Response(svg, mimetype="image/svg+xml")
 
+
+# ── Golden Config API ──────────────────────────────────────
+
+@app.route("/api/golden/<router_id>", methods=["GET"])
+def api_get_golden(router_id):
+    """Get golden config for a router."""
+    from golden_config import get_golden_config
+    golden = get_golden_config(router_id)
+    if not golden:
+        return jsonify({"exists": False, "message": "No golden config set"})
+    return jsonify({
+        "exists": True,
+        "router_id": router_id,
+        "config_size": golden["config_size"],
+        "promoted_at": golden.get("promoted_at", ""),
+        "promoted_by": golden.get("promoted_by", ""),
+        "config_hash": golden["config_hash"],
+    })
+
+
+@app.route("/api/golden/<router_id>/promote", methods=["POST"])
+def api_promote_golden(router_id):
+    """Promote a specific backup as golden config."""
+    from golden_config import set_golden_config
+    data = request.json or {}
+    config_id = data.get("config_id")
+
+    if config_id:
+        cfg = get_config_by_id(config_id)
+        if not cfg:
+            return jsonify({"success": False, "message": "Config not found"}), 404
+        if cfg["router_id"] != router_id:
+            return jsonify({"success": False, "message": "Config belongs to another router"}), 400
+        set_golden_config(router_id, cfg["config_text"], "admin-dashboard")
+    else:
+        # Promote latest backup
+        from database import get_latest_config
+        latest = get_latest_config(router_id)
+        if not latest:
+            return jsonify({"success": False, "message": "No backup exists"}), 404
+        set_golden_config(router_id, latest["config_text"], "admin-dashboard")
+
+    return jsonify({"success": True, "message": "Golden config promoted"})
+
+
+@app.route("/api/golden/<router_id>/drift", methods=["GET"])
+def api_check_drift(router_id):
+    """Check current config drift against golden baseline."""
+    from golden_config import check_drift, get_golden_config
+    router = get_router(router_id)
+    if not router:
+        return jsonify({"error": "Router not found"}), 404
+
+    golden = get_golden_config(router_id)
+    if not golden:
+        return jsonify({"has_golden": False, "message": "No golden config set"})
+
+    from database import get_latest_config
+    latest = get_latest_config(router_id)
+    if not latest:
+        return jsonify({"has_golden": True, "has_backup": False,
+                        "message": "No backup to compare against"})
+
+    drift = check_drift(router_id, latest["config_text"],
+                        router.get("device_type"))
+    drift["has_golden"] = True
+    drift["has_backup"] = True
+    return jsonify(drift)
+
+
+@app.route("/api/golden/<router_id>", methods=["DELETE"])
+def api_delete_golden(router_id):
+    """Remove golden config."""
+    from golden_config import delete_golden_config
+    delete_golden_config(router_id)
+    return jsonify({"success": True, "message": "Golden config removed"})
+
+
+@app.route("/api/bootstrap/<router_id>")
+def api_bootstrap(router_id):
+    """
+    Return the minimum bootstrap config needed for a router
+    so RBRCS can reach it after a full factory reset.
+    This is the DOCUMENTATION for Problem #1 (Bootstrap Dependency)
+    and Problem #9 (IP Address Loss).
+    """
+    router = get_router(router_id)
+    if not router:
+        return jsonify({"error": "Router not found"}), 404
+
+    device_type = router.get("device_type", "cisco_ios")
+
+    bootstrap_configs = {
+        "cisco_ios": f"""! === RBRCS Bootstrap Config for {router['name']} ===
+! Apply this via CONSOLE CABLE if router has been factory reset
+! and RBRCS cannot reach it (no IP / no SSH)
+!
+enable
+configure terminal
+!
+hostname {router['name'].replace(' ', '-')}
+!
+interface GigabitEthernet0/0
+ ip address {router['host']} 255.255.255.0
+ no shutdown
+!
+ip domain-name rbrcs.local
+crypto key generate rsa modulus 2048
+!
+username {router.get('username', 'admin')} privilege 15 secret {router.get('password', 'CHANGE-ME')}
+!
+line vty 0 4
+ login local
+ transport input ssh
+!
+ip ssh version 2
+!
+end
+write memory
+!
+! === After this, RBRCS will auto-detect and restore full config ===
+""",
+        "mikrotik_routeros": f"""# === RBRCS Bootstrap for {router['name']} ===
+/ip address add address={router['host']}/24 interface=ether1
+/ip service set ssh port=22 disabled=no
+/user set admin password={router.get('password', 'CHANGE-ME')}
+# After this, RBRCS will detect and restore.
+""",
+        "ubiquiti_edgeos": f"""# === RBRCS Bootstrap for {router['name']} ===
+configure
+set interfaces ethernet eth0 address {router['host']}/24
+set service ssh port 22
+set system login user {router.get('username', 'admin')} authentication plaintext-password {router.get('password', 'CHANGE-ME')}
+commit ; save
+# After this, RBRCS will detect and restore.
+""",
+        "generic_linux": f"""#!/bin/bash
+# === RBRCS Bootstrap for {router['name']} ===
+ip addr add {router['host']}/24 dev eth0
+ip link set eth0 up
+systemctl start sshd
+# After this, RBRCS will detect and restore.
+""",
+    }
+
+    return jsonify({
+        "router_id": router_id,
+        "device_type": device_type,
+        "instructions": "Apply via CONSOLE CABLE when router is unreachable",
+        "bootstrap_config": bootstrap_configs.get(device_type, "No template available"),
+    })
+
+
 # ── Main ───────────────────────────────────────────────────
 
 if __name__ == "__main__":

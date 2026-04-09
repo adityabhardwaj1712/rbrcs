@@ -28,6 +28,7 @@ retention:
   weekly_keep_weeks: 26               # Keep 1/week for this many weeks (6 months)
   monthly_keep_months: 0              # Keep 1/month forever (0 = unlimited)
   cleanup_hour: 3                     # Run cleanup at 3 AM daily
+  event_retention_days: 30            # Auto-delete events older than this
 
 # --- Web Dashboard ---
 dashboard:
