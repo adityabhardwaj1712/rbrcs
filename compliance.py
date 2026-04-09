@@ -128,3 +128,77 @@ def run_compliance_check(router_id, device_type, config_text, db_path=None):
 
     if not triggered:
         logger.debug(f"Router {router_id}: passed all compliance checks")
+
+
+def generate_security_report(device_type, config_text):
+    """
+    Evaluates the configuration and returns a structured JSON payload
+    with score, grade, failed rules, and passed rules.
+    """
+    if not config_text:
+        return {"score": 0, "grade": "UNKNOWN", "failed": [], "passed": []}
+
+    rules = []
+    if device_type == "cisco_ios":
+        rules = CISCO_RULES
+    elif device_type == "mikrotik_routeros":
+        rules = MIKROTIK_RULES
+
+    lines = config_text.splitlines()
+    triggered_ids = set()
+    failed = []
+
+    for line in lines:
+        for rule in rules:
+            if rule["id"] not in triggered_ids and rule["trigger"](line):
+                triggered_ids.add(rule["id"])
+                failed.append({
+                    "id": rule["id"],
+                    "severity": rule["severity"],
+                    "description": rule["description"]
+                })
+
+    # Section presence checks as rules
+    sections = REQUIRED_SECTIONS.get(device_type, {})
+    config_lower = config_text.lower()
+    for keyword, description in sections.items():
+        if keyword.lower() not in config_lower:
+            rule_id = f"SEC-{len(triggered_ids)+1}"
+            triggered_ids.add(rule_id)
+            failed.append({
+                "id": rule_id,
+                "severity": "warning",
+                "description": f"Missing: {description}"
+            })
+
+    passed = [r for r in rules if r["id"] not in triggered_ids]
+
+    total_checks = len(rules) + len(sections)
+    if total_checks == 0:
+        return {"score": 100, "grade": "N/A", "failed": [], "passed": []}
+    
+    # Calculate score
+    # An error drops score significantly
+    error_count = sum(1 for f in failed if f["severity"] == "error")
+    warning_count = sum(1 for f in failed if f["severity"] == "warning")
+    
+    score = 100 - (error_count * 20) - (warning_count * 10)
+    score = max(0, score)
+    
+    if score >= 90:
+        grade = "A"
+    elif score >= 80:
+        grade = "B"
+    elif score >= 70:
+        grade = "C"
+    elif score >= 60:
+        grade = "D"
+    else:
+        grade = "F"
+
+    return {
+        "score": score,
+        "grade": grade,
+        "failed": failed,
+        "passed": passed
+    }

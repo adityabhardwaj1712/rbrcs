@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="RBRCS — Router Backup & Recovery Command System. Enterprise-grade network configuration management dashboard.">
+  <title>RBRCS — Tactical Dashboard</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📡</text></svg>">
+</head>
+<body>
+
+<!-- ── Login Overlay ────────────────────────────────────── -->
+<div id="login-overlay" class="login-overlay active">
+  <div class="login-box">
+    <div class="login-brand">
+      <div class="login-logo">R</div>
+      <div class="login-title">RBRCS</div>
+      <div class="login-subtitle">Command System</div>
+    </div>
+    <form id="login-form" class="form-group param-form">
+      <label>Admin Username</label>
+      <input type="text" id="login-user" required placeholder="admin">
+      <label style="margin-top: 10px;">Password</label>
+      <input type="password" id="login-pass" required placeholder="••••••••">
+      <div id="login-error" class="form-hint" style="color: var(--accent-red); margin-top: 5px;"></div>
+      <button type="submit" class="btn btn-primary" style="margin-top: 20px; width: 100%; justify-content: center;">Authenticate</button>
+    </form>
+  </div>
+</div>
+
+<div id="app-layout" style="display: none;">
+  <!-- ── Sidebar ──────────────────────────────────────────── -->
+  <aside class="sidebar">
+    <div class="sidebar-brand">
+      <div class="sidebar-logo">R</div>
+      <div>
+        <div class="sidebar-title">RBRCS</div>
+        <div class="sidebar-subtitle">Command System</div>
+      </div>
+    </div>
+    <nav class="sidebar-nav">
+      <a href="#" class="nav-link active" data-view="dashboard">
+        <span class="icon">📊</span> Dashboard
+      </a>
+      <a href="#" class="nav-link" data-view="fleet">
+        <span class="icon">📡</span> Router Fleet
+      </a>
+      <a href="#" class="nav-link" data-view="add-router">
+        <span class="icon">➕</span> Add Router
+      </a>
+      <a href="#" class="nav-link" data-view="terminal">
+        <span class="icon">💻</span> Push Config
+      </a>
+      <a href="#" class="nav-link" data-view="compliance">
+        <span class="icon">🛡️</span> Security Audit
+      </a>
+    </nav>
+    <div style="flex:1"></div>
+    <div style="padding: 0 12px;">
+      <a href="#" class="nav-link" onclick="logout()" style="justify-content: flex-start;">
+        <span class="icon">🔒</span> Logout
+      </a>
+    </div>
+  </aside>
+
+  <!-- ── Main Content ─────────────────────────────────────── -->
+  <main class="main-content">
+    <header class="header">
+      <div class="header-title-bar">
+        <h1 id="view-title">Dashboard Overview</h1>
+      </div>
+      <div class="header-meta">
+        <span class="header-clock" id="header-clock">--:--:--</span>
+        <div class="connection-indicator">
+          <span class="connection-dot" id="conn-dot"></span>
+          <span id="conn-label">Connecting…</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- View: Dashboard -->
+    <div id="view-dashboard" class="view active">
+      <!-- Stats Bar -->
+      <section class="stats-bar">
+        <div class="stat-card">
+          <div class="stat-label">Total Routers</div>
+          <div class="stat-value" id="stat-total">—</div>
+        </div>
+        <div class="stat-card stat-online">
+          <div class="stat-label">Online</div>
+          <div class="stat-value" id="stat-online">—</div>
+        </div>
+        <div class="stat-card stat-backups">
+          <div class="stat-label">Config Backups</div>
+          <div class="stat-value" id="stat-backups">—</div>
+        </div>
+        <div class="stat-card stat-storage">
+          <div class="stat-label">Storage Used</div>
+          <div class="stat-value" id="stat-storage">—</div>
+        </div>
+      </section>
+
+      <!-- Main Dash Grid -->
+      <section class="main-grid">
+        <div class="panel">
+          <div class="panel-header">
+            <h2 class="panel-title"><span class="icon">📋</span> Event Log</h2>
+          </div>
+          <div class="panel-body">
+            <div class="event-list" id="event-list">
+              <div class="empty-state"><div class="empty-state-icon">⏳</div><div class="empty-state-text">Loading events...</div></div>
+            </div>
+          </div>
+        </div>
+        
+        <div class="panel-stack">
+          <!-- Scheduled Jobs -->
+          <div class="panel">
+            <div class="panel-header">
+              <h2 class="panel-title"><span class="icon">⏱</span> Scheduled Jobs</h2>
+            </div>
+            <div class="panel-body">
+              <table class="jobs-table">
+                <thead>
+                  <tr><th>Job</th><th>Next Run</th></tr>
+                </thead>
+                <tbody id="jobs-tbody">
+                  <tr><td colspan="2" class="empty-state">Loading...</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+          <!-- Retention Stats -->
+          <div class="panel" style="margin-top: 20px;">
+            <div class="panel-header">
+              <h2 class="panel-title"><span class="icon">💾</span> Retention Storage</h2>
+            </div>
+            <div class="panel-body">
+              <div class="retention-grid">
+                <div class="retention-item">
+                  <div class="retention-label">Unique Configs</div>
+                  <div class="retention-value" id="ret-unique">—</div>
+                </div>
+                <div class="retention-item">
+                  <div class="retention-label">Dedup Saves</div>
+                  <div class="retention-value" id="ret-dedup">—</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <!-- View: Compliance -->
+    <div id="view-compliance" class="view">
+      <div class="panel">
+        <div class="panel-header">
+          <h1 class="panel-title"><span class="icon">🛡️</span> CIS Security Audit</h1>
+          <div class="panel-actions">
+            <button class="btn btn-sm" onclick="refreshCompliance()">↻ Rescan All</button>
+          </div>
+        </div>
+        <div class="panel-body">
+          <table class="router-table" id="compliance-table">
+            <thead>
+              <tr>
+                <th>Router</th>
+                <th>Security Grade</th>
+                <th>Score</th>
+                <th>Checks Passed</th>
+                <th>Checks Failed</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="compliance-tbody">
+              <!-- Rendered via JS -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- View: Fleet -->
+    <div id="view-fleet" class="view">
+      <div class="panel">
+        <div class="panel-header">
+          <h1 class="panel-title"><span class="icon">📡</span> Router Fleet</h1>
+          <div class="panel-actions">
+            <button class="btn btn-sm" onclick="switchView('add-router')">➕ Add Router</button>
+            <button class="btn btn-sm" onclick="refreshDashboard()">↻ Refresh</button>
+          </div>
+        </div>
+        <div class="panel-body">
+          <table class="router-table" id="router-table">
+            <thead>
+              <tr>
+                <th>Router</th>
+                <th>Status</th>
+                <th>Type</th>
+                <th>Backups</th>
+                <th>Last Backup</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="router-tbody">
+              <tr><td colspan="6"><div class="empty-state"><div class="empty-state-icon">⏳</div><div class="empty-state-text">Loading routers...</div></div></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- View: Add Router -->
+    <div id="view-add-router" class="view">
+      <div class="panel narrow-panel">
+        <div class="panel-header">
+          <h1 class="panel-title"><span class="icon">➕</span> Add New Router</h1>
+        </div>
+        <div class="panel-body pad-body">
+          <form id="add-router-form" class="form-grid">
+            <div class="form-group">
+              <label>Router ID</label>
+              <input type="text" id="ar-id" required pattern="[A-Za-z0-9-_]+" placeholder="e.g. hq-router-01" title="Letters, numbers, dashes, underscores only">
+            </div>
+            <div class="form-group">
+              <label>Display Name</label>
+              <input type="text" id="ar-name" required placeholder="Main HQ Router">
+            </div>
+            <div class="form-group">
+              <label>Hostname / IP</label>
+              <input type="text" id="ar-host" required placeholder="192.168.1.1">
+            </div>
+            <div class="form-group">
+              <label>SSH Port</label>
+              <input type="number" id="ar-port" required value="22">
+            </div>
+            <div class="form-group">
+              <label>Device Type</label>
+              <select id="ar-type">
+                <option value="cisco_ios">Cisco IOS</option>
+                <option value="mikrotik_routeros">MikroTik RouterOS</option>
+                <option value="ubiquiti_edgeos">Ubiquiti EdgeOS</option>
+                <option value="generic_linux">Generic Linux</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Username</label>
+              <input type="text" id="ar-user" placeholder="admin">
+            </div>
+            <div class="form-group">
+              <label>Password</label>
+              <input type="password" id="ar-pass" placeholder="(leave blank if using keys)">
+            </div>
+            <div class="form-group">
+              <label>Enable Password (Cisco only)</label>
+              <input type="password" id="ar-enable">
+            </div>
+            <div class="form-actions">
+              <button type="submit" class="btn btn-primary">Save Router</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+
+    <!-- View: Push Config (Terminal) -->
+    <div id="view-terminal" class="view">
+      <div class="grid-2col">
+        <div class="panel">
+          <div class="panel-header">
+            <h1 class="panel-title"><span class="icon">💻</span> Configuration Push</h1>
+          </div>
+          <div class="panel-body pad-body">
+            <form id="push-config-form">
+              <div class="form-group">
+                <label>Target Router</label>
+                <select id="pc-router" required>
+                  <option value="">Select a router...</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label>Commands to Execute</label>
+                <textarea id="pc-commands" required rows="10" placeholder="interface GigabitEthernet0/0
+description Configured via RBRCS Terminal
+exit" class="code-textarea"></textarea>
+                <small class="form-hint">Commands will run sequentially in configuration mode (if supported).</small>
+              </div>
+              <div class="form-actions">
+                <button type="submit" class="btn btn-primary" id="btn-push-exec">⚡ Execute Commands</button>
+              </div>
+            </form>
+          </div>
+        </div>
+
+        <div class="panel terminal-panel">
+          <div class="panel-header">
+            <h1 class="panel-title"><span class="icon">🖥️</span> Terminal Output</h1>
+            <div class="panel-actions">
+              <button class="btn btn-sm" onclick="document.getElementById('terminal-out').textContent=''">Clear</button>
+            </div>
+          </div>
+          <div class="panel-body console-body">
+            <pre id="terminal-out">Awaiting execution...</pre>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<!-- Modal Overlay -->
+<div class="modal-overlay" id="modal-overlay">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title" id="modal-title"></div>
+      <button class="modal-close" onclick="closeModal()">✕</button>
+    </div>
+    <div class="modal-body" id="modal-body"></div>
+  </div>
+</div>
+
+<div class="toast-container" id="toast-container"></div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

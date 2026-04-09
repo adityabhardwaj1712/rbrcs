@@ -9,13 +9,13 @@ SOLVES:
 Ultra-lightweight: no extra threads, no timers — just state tracking in dicts.
 """
 
-import os
 import time
 import logging
 from ssh_manager import SSHManager
 from database import get_all_routers, update_router_status, log_event
 from backup_engine import backup_router
 from restore_engine import check_and_auto_restore
+from alerts import send_alert as _send_alert
 
 logger = logging.getLogger("rbrcs.health")
 ssh = SSHManager()
@@ -144,14 +144,4 @@ def poll_backup_all(db_path=None):
     return results
 
 
-def _send_alert(router, event_type, message):
-    """Send webhook alert if configured."""
-    try:
-        import yaml, requests
-        with open("config.yaml", "r", encoding="utf-8") as f:
-            cfg = yaml.safe_load(os.path.expandvars(f.read()))
-        url = cfg.get("alerts", {}).get("webhook_url", "")
-        if url:
-            requests.post(url, json={"text": message}, timeout=5)
-    except Exception:
-        pass
+

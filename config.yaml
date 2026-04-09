@@ -9,6 +9,12 @@ system:
   log_level: "INFO"                   # DEBUG, INFO, WARNING, ERROR
   secret_key: "rbrcs-a8f3b1q9x7y2z0"
 
+# --- Authentication ---
+auth:
+  enabled: true
+  admin_username: "admin"
+  admin_password: "password"          # Default password, change in production!
+
 # --- Syslog Listener ---
 syslog:
   enabled: false                      # Set true if your router sends syslog
@@ -30,11 +36,6 @@ retention:
   cleanup_hour: 3                     # Run cleanup at 3 AM daily
   event_retention_days: 30            # Auto-delete events older than this
 
-# --- Web Dashboard ---
-dashboard:
-  host: "0.0.0.0"
-  port: 5000
-  debug: false
 
 # --- Alerts ---
 alerts:

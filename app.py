@@ -1,26 +1,35 @@
 """
-app.py — Flask web dashboard for RBRCS.
+app.py — RBRCS Backend: Flask API + Scheduler + Syslog.
 
-Main entry point. Starts the web server, scheduler, and syslog listener.
+Serves the tactical dashboard (static/) and exposes REST API endpoints
+for real-time router management, backup/restore, config viewing, and system stats.
 """
 
 import os
 import sys
-import difflib
+import time
 import logging
+import signal
+import threading
 import yaml
-from flask import Flask, render_template, request, jsonify, redirect, url_for
+import difflib
+
+from flask import Flask, jsonify, request, send_from_directory, session
 
 from database import (
-    init_db, upsert_router, get_all_routers, get_router,
-    get_dashboard_stats, get_config_history, get_config_by_id,
-    get_events, log_event, get_total_storage_bytes, DB_PATH
+    init_db, upsert_router, log_event, SQLiteHandler,
+    get_all_routers, get_router, get_dashboard_stats,
+    get_events, get_config_history, get_config_by_id,
+    get_latest_config, get_total_storage_bytes,
+    delete_router
 )
-from backup_engine import backup_router, backup_all
-from restore_engine import restore_router
 from scheduler import start_scheduler, stop_scheduler, get_scheduled_jobs
 from syslog_listener import SyslogListener
+from backup_engine import backup_router
+from restore_engine import restore_router
+from ssh_manager import SSHManager
 from retention import get_retention_stats
+from compliance import generate_security_report
 
 # ── Logging ────────────────────────────────────────────────
 
@@ -29,506 +38,319 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     handlers=[
         logging.StreamHandler(sys.stdout),
-        logging.FileHandler("rbrcs.log", encoding="utf-8"),
+        SQLiteHandler()
     ]
 )
-logger = logging.getLogger("rbrcs.app")
+logger = logging.getLogger("rbrcs.core")
 
 # ── Load Config ────────────────────────────────────────────
 
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config.yaml")
 
-
 def load_config():
     """Load config.yaml with env var expansion."""
+    if not os.path.exists(CONFIG_PATH):
+        logger.error(f"Configuration file not found: {CONFIG_PATH}")
+        sys.exit(1)
     with open(CONFIG_PATH, "r", encoding="utf-8") as f:
         expanded = os.path.expandvars(f.read())
         return yaml.safe_load(expanded)
 
-
 config = load_config()
-
-# ── Flask App ──────────────────────────────────────────────
-
-app = Flask(__name__)
-app.secret_key = config.get("system", {}).get("secret_key", "default-secret")
 
 # Set DB path from config
 import database
 database.DB_PATH = config.get("system", {}).get("db_path", "rbrcs.db")
 
-# ── Initialize ─────────────────────────────────────────────
+# ── Flask App ──────────────────────────────────────────────
 
-init_db()
+STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
+app = Flask(__name__, static_folder=STATIC_DIR)
+app.config["SECRET_KEY"] = config.get("system", {}).get("secret_key", "rbrcs-default")
 
-# Sync routers from config.yaml into database
-for router_cfg in config.get("routers", []):
-    upsert_router(router_cfg)
-    logger.info(f"Registered router: {router_cfg['name']} ({router_cfg['host']})")
-
-log_event(None, "system_start", "RBRCS system started", "info")
-
-
-# ── Utility ────────────────────────────────────────────────
-
-def format_bytes(b):
-    """Format bytes into human-readable string."""
-    if b < 1024:
-        return f"{b} B"
-    elif b < 1024 * 1024:
-        return f"{b / 1024:.1f} KB"
-    else:
-        return f"{b / (1024 * 1024):.1f} MB"
+# Disable Flask's verbose request logging for lighter output
+log = logging.getLogger("werkzeug")
+log.setLevel(logging.WARNING)
 
 
-@app.template_filter("format_bytes")
-def format_bytes_filter(b):
-    return format_bytes(b)
-
-
-@app.template_filter("time_ago")
-def time_ago_filter(timestamp_str):
-    """Convert a timestamp to 'X minutes ago' format."""
-    if not timestamp_str:
-        return "Never"
-    from datetime import datetime
-    try:
-        ts = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
-        now = datetime.utcnow()
-        diff = now - ts.replace(tzinfo=None)
-        seconds = int(diff.total_seconds())
-        if seconds < 60:
-            return "just now"
-        elif seconds < 3600:
-            m = seconds // 60
-            return f"{m}m ago"
-        elif seconds < 86400:
-            h = seconds // 3600
-            return f"{h}h ago"
-        else:
-            d = seconds // 86400
-            return f"{d}d ago"
-    except Exception:
-        return timestamp_str
-
-
-# ── Routes ─────────────────────────────────────────────────
-
-@app.context_processor
-def inject_sidebar_routers():
-    return dict(sidebar_routers=get_all_routers())
+# ── Static / Dashboard ────────────────────────────────────
 
 @app.route("/")
-def dashboard():
-    """Main dashboard."""
-    stats = get_dashboard_stats()
-    retention = get_retention_stats()
-    jobs = get_scheduled_jobs()
-    return render_template("dashboard.html",
-                           stats=stats, retention=retention, jobs=jobs)
+def serve_dashboard():
+    return send_from_directory(STATIC_DIR, "index.html")
+
+@app.route("/static/<path:filename>")
+def serve_static(filename):
+    return send_from_directory(STATIC_DIR, filename)
 
 
-@app.route("/router/add")
-def add_router_page():
-    """Add Router UI."""
-    return render_template("add_router.html")
+# ── Authentication ────────────────────────────────────────
+
+@app.before_request
+def require_auth():
+    if request.path.startswith("/static/") or request.path == "/":
+        return
+    if request.path in ["/api/login", "/api/auth/status"]:
+        return
+    
+    auth_cfg = config.get("auth", {})
+    if not auth_cfg.get("enabled", False):
+        return
+        
+    if request.path.startswith("/api/"):
+        if not session.get("logged_in"):
+            return jsonify({"error": "Unauthorized"}), 401
+
+@app.route("/api/auth/status")
+def api_auth_status():
+    auth_cfg = config.get("auth", {})
+    if not auth_cfg.get("enabled", False):
+        return jsonify({"enabled": False, "logged_in": True})
+    return jsonify({
+        "enabled": True, 
+        "logged_in": session.get("logged_in", False)
+    })
+
+@app.route("/api/login", methods=["POST"])
+def api_login():
+    auth_cfg = config.get("auth", {})
+    payload = request.json or {}
+    username = payload.get("username")
+    password = payload.get("password")
+    
+    if username == auth_cfg.get("admin_username") and password == auth_cfg.get("admin_password"):
+        session["logged_in"] = True
+        return jsonify({"success": True})
+    return jsonify({"error": "Invalid credentials"}), 401
+
+@app.route("/api/logout", methods=["POST"])
+def api_logout():
+    session.clear()
+    return jsonify({"success": True})
 
 
-@app.route("/router/<router_id>")
-def router_detail(router_id):
-    """Per-router detail page with backup history."""
-    router = get_router(router_id)
-    if not router:
-        return "Router not found", 404
+# ── API: Dashboard Stats ──────────────────────────────────
 
-    history = get_config_history(router_id, limit=50)
-    events = get_events(limit=30, router_id=router_id)
-    return render_template("router_detail.html",
-                           router=router, history=history, events=events)
+def update_config_yaml_routers(routers_list):
+    from ruamel.yaml import YAML
+    yaml_parser = YAML()
+    yaml_parser.preserve_quotes = True
+    with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+        data = yaml_parser.load(f)
+    if not data:
+        data = {}
+    data["routers"] = routers_list
+    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+        yaml_parser.dump(data, f)
+    # Sync runtime config variable and database
+    global config
+    config = load_config()
+
+@app.route("/api/stats")
+def api_stats():
+    return jsonify(get_dashboard_stats())
+
+@app.route("/api/routers", methods=["GET", "POST"])
+def api_routers():
+    if request.method == "POST":
+        router_data = request.json
+        upsert_router(router_data)
+        routers = get_all_routers()
+        update_config_yaml_routers(routers)
+        return jsonify({"success": True})
+    return jsonify(get_all_routers())
+
+@app.route("/api/routers/<router_id>", methods=["GET", "DELETE"])
+def api_router_detail(router_id):
+    if request.method == "DELETE":
+        delete_router(router_id)
+        routers = get_all_routers()
+        update_config_yaml_routers(routers)
+        return jsonify({"success": True})
+    r = get_router(router_id)
+    if not r:
+        return jsonify({"error": "Not found"}), 404
+    return jsonify(r)
+
+@app.route("/api/routers/<router_id>/history")
+def api_router_history(router_id):
+    limit = request.args.get("limit", 50, type=int)
+    return jsonify(get_config_history(router_id, limit))
+
+@app.route("/api/routers/<router_id>/config/<int:config_id>")
+def api_config_detail(router_id, config_id):
+    cfg = get_config_by_id(config_id)
+    if not cfg:
+        return jsonify({"error": "Config not found"}), 404
+    if cfg["router_id"] != router_id:
+        return jsonify({"error": "Config does not belong to this router"}), 403
+    # Remove binary blob from response
+    cfg.pop("config_data", None)
+    return jsonify(cfg)
 
 
-@app.route("/diff/<int:config_id_a>/<int:config_id_b>")
-def diff_configs(config_id_a, config_id_b):
-    """Side-by-side config diff."""
-    config_a = get_config_by_id(config_id_a)
-    config_b = get_config_by_id(config_id_b)
+# ── API: Events ───────────────────────────────────────────
 
-    if not config_a or not config_b:
-        return "Config not found", 404
-
-    # Generate unified diff
-    diff_lines = list(difflib.unified_diff(
-        config_a["config_text"].splitlines(keepends=True),
-        config_b["config_text"].splitlines(keepends=True),
-        fromfile=f"Config #{config_id_a} ({config_a['timestamp']})",
-        tofile=f"Config #{config_id_b} ({config_b['timestamp']})",
-        lineterm=""
-    ))
-
-    return render_template("diff.html",
-                           config_a=config_a, config_b=config_b,
-                           diff_lines=diff_lines)
+@app.route("/api/events")
+def api_events():
+    limit = request.args.get("limit", 100, type=int)
+    router_id = request.args.get("router_id", None)
+    return jsonify(get_events(limit, router_id))
 
 
-@app.route("/config/<int:config_id>")
-def view_config(config_id):
-    """View a specific config's full text."""
-    config_data = get_config_by_id(config_id)
-    if not config_data:
-        return "Config not found", 404
-    router = get_router(config_data["router_id"])
-    return render_template("view_config.html", config=config_data, router=router)
+# ── API: Scheduled Jobs ──────────────────────────────────
+
+@app.route("/api/jobs")
+def api_jobs():
+    return jsonify(get_scheduled_jobs())
 
 
-@app.route("/events")
-def events_page():
-    """Event log page."""
-    events = get_events(limit=200)
-    return render_template("events.html", events=events)
+# ── API: Retention Stats ─────────────────────────────────
+
+@app.route("/api/retention-stats")
+def api_retention():
+    return jsonify(get_retention_stats())
 
 
-@app.route("/settings")
-def settings_page():
-    """Settings page."""
-    return render_template("settings.html", config=config)
+# ── API: Backup Trigger ──────────────────────────────────
 
-
-# ── API Endpoints ──────────────────────────────────────────
-
-@app.route("/api/backup/<router_id>", methods=["POST"])
+@app.route("/api/backup/<router_id>")
 def api_backup(router_id):
-    """Trigger manual backup via API."""
     result = backup_router(router_id, change_type="manual")
     return jsonify(result)
 
 
-@app.route("/api/backup-all", methods=["POST"])
-def api_backup_all():
-    """Trigger backup of all routers."""
-    results = backup_all()
-    return jsonify({"results": results})
+# ── API: Restore Trigger ─────────────────────────────────
 
-
-@app.route("/api/restore/<router_id>", methods=["POST"])
+@app.route("/api/restore/<router_id>")
 def api_restore(router_id):
-    """Restore a router config via API."""
-    config_id = request.json.get("config_id") if request.is_json else None
+    config_id = request.args.get("config_id", None, type=int)
     result = restore_router(router_id, config_id=config_id)
     return jsonify(result)
 
+# ── API: Push Config ─────────────────────────────────────
 
-@app.route("/api/routers", methods=["GET", "POST"])
-def api_routers():
-    """Get all routers or add a new router."""
-    if request.method == "POST":
-        router_data = request.json
-        # Format the data
-        router_cfg = {
-            "id": router_data.get("id"),
-            "name": router_data.get("name"),
-            "host": router_data.get("host"),
-            "port": int(router_data.get("port", 22)),
-            "device_type": router_data.get("device_type", "cisco_ios"),
-            "username": router_data.get("username", ""),
-            "password": router_data.get("password", ""),
-            "enable_password": router_data.get("enable_password", "")
-        }
-        
-        # Upsert in database
-        upsert_router(router_cfg)
-
-        # Append to config.yaml 
-        import textwrap
-        yaml_snippet = textwrap.dedent(f"""\n
-          - id: "{router_cfg['id']}"
-            name: "{router_cfg['name']}"
-            host: "{router_cfg['host']}"
-            port: {router_cfg['port']}
-            device_type: "{router_cfg['device_type']}"
-            username: "{router_cfg['username']}"
-            password: "{router_cfg['password']}"
-            enable_password: "{router_cfg['enable_password']}"
-        """).lstrip()
-        
-        with open(CONFIG_PATH, "a", encoding="utf-8") as f:
-            f.write(yaml_snippet)
-
-        log_event(router_cfg['id'], "router_added", f"Successfully added router from UI", "info")
-        return jsonify({"success": True, "message": "Router added successfully"})
-
-    routers = get_all_routers()
-    return jsonify(routers)
-
-
-@app.route("/api/stats", methods=["GET"])
-def api_stats():
-    """Get dashboard stats."""
-    stats = get_dashboard_stats()
-    stats["total_storage_formatted"] = format_bytes(stats["total_storage"])
-    return jsonify(stats)
-
-
-@app.route("/api/config/<int:config_id>/download")
-def api_download_config(config_id):
-    """Download a config as a text file."""
-    from flask import Response
-    config_data = get_config_by_id(config_id)
-    if not config_data:
-        return "Not found", 404
-    router = get_router(config_data["router_id"])
-    filename = f"{router['name']}_{config_data['timestamp']}.txt".replace(" ", "_")
-    return Response(
-        config_data["config_text"],
-        mimetype="text/plain",
-        headers={"Content-Disposition": f"attachment; filename={filename}"}
-    )
-
-
-@app.route("/api/router/<router_id>/configure", methods=["POST"])
-def api_configure_router(router_id):
-    """Execute raw configuration commands natively from the UI payload."""
-    data = request.json
-    commands = data.get("commands", "")
-    
+@app.route("/api/routers/<router_id>/push", methods=["POST"])
+def api_push_config(router_id):
     router = get_router(router_id)
     if not router:
-        return jsonify({"success": False, "message": "Router not found"}), 404
-
-    if not commands.strip():
-        return jsonify({"success": False, "message": "No commands provided"}), 400
-
-    from ssh_manager import SSHManager
-    mgr = SSHManager()
-    success, output = mgr.execute_commands(router, commands)
-    
-    if success:
-        log_event(router_id, "config_deployed", "Ad-hoc configuration pushed via Dashboard.", "warning")
-        
+        return jsonify({"error": "Router not found"}), 404
+    commands = request.json.get("commands", "")
+    if not commands:
+        return jsonify({"error": "No commands provided"}), 400
+    ssh = SSHManager()
+    success, output = ssh.execute_commands(router, commands)
     return jsonify({"success": success, "output": output})
 
-@app.route("/api/health")
-def api_health():
-    """Simple healthcheck endpoint."""
-    return jsonify({"status": "ok", "uptime": "running"})
 
+# ── API: Compliance Trigger ────────────────────────────────
 
-@app.route("/api/export-all")
-def api_export_all():
-    """Export all latest configs as a ZIP file."""
-    import zipfile
-    import io
-    from flask import send_file
-    
-    memory_file = io.BytesIO()
-    routers = get_all_routers()
-    
-    with zipfile.ZipFile(memory_file, 'w', zipfile.ZIP_DEFLATED) as zf:
-        for router in routers:
-            from database import get_latest_config
-            config_data = get_latest_config(router["id"])
-            if config_data:
-                filename = f"{router['name']}_{config_data['timestamp'].replace(':', '-')}.txt".replace(" ", "_")
-                # Fix timestamp string to avoid invalid characters in filename
-                zf.writestr(filename, config_data["config_text"])
-                
-    memory_file.seek(0)
-    return send_file(
-        memory_file,
-        mimetype="application/zip",
-        as_attachment=True,
-        download_name="rbrcs_configs_export.zip"
-    )
-
-@app.route('/favicon.ico')
-def favicon():
-    """Serve a simple empty favicon to prevent 404s."""
-    from flask import Response
-    svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path></svg>'
-    return Response(svg, mimetype="image/svg+xml")
-
-
-# ── Golden Config API ──────────────────────────────────────
-
-@app.route("/api/golden/<router_id>", methods=["GET"])
-def api_get_golden(router_id):
-    """Get golden config for a router."""
-    from golden_config import get_golden_config
-    golden = get_golden_config(router_id)
-    if not golden:
-        return jsonify({"exists": False, "message": "No golden config set"})
-    return jsonify({
-        "exists": True,
-        "router_id": router_id,
-        "config_size": golden["config_size"],
-        "promoted_at": golden.get("promoted_at", ""),
-        "promoted_by": golden.get("promoted_by", ""),
-        "config_hash": golden["config_hash"],
-    })
-
-
-@app.route("/api/golden/<router_id>/promote", methods=["POST"])
-def api_promote_golden(router_id):
-    """Promote a specific backup as golden config."""
-    from golden_config import set_golden_config
-    data = request.json or {}
-    config_id = data.get("config_id")
-
-    if config_id:
-        cfg = get_config_by_id(config_id)
-        if not cfg:
-            return jsonify({"success": False, "message": "Config not found"}), 404
-        if cfg["router_id"] != router_id:
-            return jsonify({"success": False, "message": "Config belongs to another router"}), 400
-        set_golden_config(router_id, cfg["config_text"], "admin-dashboard")
-    else:
-        # Promote latest backup
-        from database import get_latest_config
-        latest = get_latest_config(router_id)
-        if not latest:
-            return jsonify({"success": False, "message": "No backup exists"}), 404
-        set_golden_config(router_id, latest["config_text"], "admin-dashboard")
-
-    return jsonify({"success": True, "message": "Golden config promoted"})
-
-
-@app.route("/api/golden/<router_id>/drift", methods=["GET"])
-def api_check_drift(router_id):
-    """Check current config drift against golden baseline."""
-    from golden_config import check_drift, get_golden_config
+@app.route("/api/routers/<router_id>/compliance")
+def api_get_compliance(router_id):
     router = get_router(router_id)
     if not router:
         return jsonify({"error": "Router not found"}), 404
-
-    golden = get_golden_config(router_id)
-    if not golden:
-        return jsonify({"has_golden": False, "message": "No golden config set"})
-
-    from database import get_latest_config
-    latest = get_latest_config(router_id)
-    if not latest:
-        return jsonify({"has_golden": True, "has_backup": False,
-                        "message": "No backup to compare against"})
-
-    drift = check_drift(router_id, latest["config_text"],
-                        router.get("device_type"))
-    drift["has_golden"] = True
-    drift["has_backup"] = True
-    return jsonify(drift)
+        
+    cfg = get_latest_config(router_id)
+    config_text = cfg["config_text"] if cfg else ""
+    
+    report = generate_security_report(router["device_type"], config_text)
+    return jsonify(report)
 
 
-@app.route("/api/golden/<router_id>", methods=["DELETE"])
-def api_delete_golden(router_id):
-    """Remove golden config."""
-    from golden_config import delete_golden_config
-    delete_golden_config(router_id)
-    return jsonify({"success": True, "message": "Golden config removed"})
+# ── API: Config Diff ─────────────────────────────────────
 
+@app.route("/api/config/diff")
+def api_config_diff():
+    router_id = request.args.get("router_id")
+    config_id = request.args.get("config_id", type=int)
+    if not router_id or not config_id:
+        return jsonify({"error": "router_id and config_id required"}), 400
 
-@app.route("/api/bootstrap/<router_id>")
-def api_bootstrap(router_id):
-    """
-    Return the minimum bootstrap config needed for a router
-    so RBRCS can reach it after a full factory reset.
-    This is the DOCUMENTATION for Problem #1 (Bootstrap Dependency)
-    and Problem #9 (IP Address Loss).
-    """
-    router = get_router(router_id)
-    if not router:
-        return jsonify({"error": "Router not found"}), 404
+    current = get_config_by_id(config_id)
+    if not current:
+        return jsonify({"error": "Config not found"}), 404
 
-    device_type = router.get("device_type", "cisco_ios")
+    # Find previous config
+    history = get_config_history(router_id, limit=50)
+    prev = None
+    found_current = False
+    for h in history:
+        if found_current:
+            prev = get_config_by_id(h["id"])
+            break
+        if h["id"] == config_id:
+            found_current = True
 
-    bootstrap_configs = {
-        "cisco_ios": f"""! === RBRCS Bootstrap Config for {router['name']} ===
-! Apply this via CONSOLE CABLE if router has been factory reset
-! and RBRCS cannot reach it (no IP / no SSH)
-!
-enable
-configure terminal
-!
-hostname {router['name'].replace(' ', '-')}
-!
-interface GigabitEthernet0/0
- ip address {router['host']} 255.255.255.0
- no shutdown
-!
-ip domain-name rbrcs.local
-crypto key generate rsa modulus 2048
-!
-username {router.get('username', 'admin')} privilege 15 secret {router.get('password', 'CHANGE-ME')}
-!
-line vty 0 4
- login local
- transport input ssh
-!
-ip ssh version 2
-!
-end
-write memory
-!
-! === After this, RBRCS will auto-detect and restore full config ===
-""",
-        "mikrotik_routeros": f"""# === RBRCS Bootstrap for {router['name']} ===
-/ip address add address={router['host']}/24 interface=ether1
-/ip service set ssh port=22 disabled=no
-/user set admin password={router.get('password', 'CHANGE-ME')}
-# After this, RBRCS will detect and restore.
-""",
-        "ubiquiti_edgeos": f"""# === RBRCS Bootstrap for {router['name']} ===
-configure
-set interfaces ethernet eth0 address {router['host']}/24
-set service ssh port 22
-set system login user {router.get('username', 'admin')} authentication plaintext-password {router.get('password', 'CHANGE-ME')}
-commit ; save
-# After this, RBRCS will detect and restore.
-""",
-        "generic_linux": f"""#!/bin/bash
-# === RBRCS Bootstrap for {router['name']} ===
-ip addr add {router['host']}/24 dev eth0
-ip link set eth0 up
-systemctl start sshd
-# After this, RBRCS will detect and restore.
-""",
-    }
+    if not prev:
+        return jsonify({"error": "No previous config to compare against"})
+
+    diff_lines = list(difflib.unified_diff(
+        prev["config_text"].splitlines(),
+        current["config_text"].splitlines(),
+        fromfile=f"Backup #{prev['id']}",
+        tofile=f"Backup #{current['id']}",
+        lineterm=""
+    ))
+
+    additions = sum(1 for l in diff_lines if l.startswith('+') and not l.startswith('+++'))
+    deletions = sum(1 for l in diff_lines if l.startswith('-') and not l.startswith('---'))
 
     return jsonify({
-        "router_id": router_id,
-        "device_type": device_type,
-        "instructions": "Apply via CONSOLE CABLE when router is unreachable",
-        "bootstrap_config": bootstrap_configs.get(device_type, "No template available"),
+        "current_id": config_id,
+        "previous_id": prev["id"],
+        "diff": "\n".join(diff_lines),
+        "additions": additions,
+        "deletions": deletions,
     })
+
+
+# ── Termination Handler ──────────────────────────────────
+
+def graceful_shutdown(signum, frame):
+    logger.info("Termination signal received. Shutting down...")
+    stop_scheduler()
+    sys.exit(0)
+
+signal.signal(signal.SIGINT, graceful_shutdown)
+signal.signal(signal.SIGTERM, graceful_shutdown)
 
 
 # ── Main ───────────────────────────────────────────────────
 
-if __name__ == "__main__":
+def run():
+    """Main execution: init DB, start scheduler, start Flask."""
+    logger.info("Initializing RBRCS Core Service...")
+
+    # Initialize DB
+    init_db()
+
+    # Sync routers from config.yaml into database
+    routers = config.get("routers", [])
+    for router_cfg in routers:
+        upsert_router(router_cfg)
+        logger.info(f"Synchronized node: {router_cfg['name']} ({router_cfg['host']})")
+
+    log_event(None, "service_start", "RBRCS service initialized", "info")
+
     # Start scheduler
     start_scheduler(config)
+    logger.info("Scheduler online.")
 
     # Start syslog listener if enabled
     syslog_cfg = config.get("syslog", {})
     if syslog_cfg.get("enabled", False):
-        syslog = SyslogListener(
-            host=syslog_cfg.get("listen_host", "0.0.0.0"),
-            port=syslog_cfg.get("listen_port", 514),
-        )
+        listen_host = syslog_cfg.get("listen_host", "0.0.0.0")
+        listen_port = syslog_cfg.get("listen_port", 514)
+        syslog = SyslogListener(host=listen_host, port=listen_port)
         syslog.start()
+        logger.info(f"Syslog listener on {listen_host}:{listen_port}")
 
-    # Start Flask / Waitress
-    dashboard_cfg = config.get("dashboard", {})
-    host = dashboard_cfg.get("host", "0.0.0.0")
-    port = dashboard_cfg.get("port", 5000)
-    debug_mode = dashboard_cfg.get("debug", True)
-    
-    if debug_mode:
-        logger.warning("Running Flask Development Server (debug: true)")
-        app.run(
-            host=host,
-            port=port,
-            debug=True,
-            use_reloader=False,  # Prevent double-start with scheduler
-        )
-    else:
-        logger.info(f"Starting Waitress Production Server on {host}:{port}")
-        from waitress import serve
-        serve(app, host=host, port=port, threads=2)
+    # Start Flask API server
+    port = config.get("system", {}).get("web_port", 8080)
+    logger.info(f"Dashboard live at http://0.0.0.0:{port}")
+    app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
+
+
+if __name__ == "__main__":
+    run()

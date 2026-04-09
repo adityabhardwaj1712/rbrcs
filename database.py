@@ -11,7 +11,28 @@ import sqlite3
 import hashlib
 import zlib
 import os
+import logging
 from datetime import datetime, timedelta
+
+
+class SQLiteHandler(logging.Handler):
+    """Custom logging handler to write system logs into the SQLite database."""
+    def __init__(self, db_path=None):
+        super().__init__()
+        self.db_path = db_path
+
+    def emit(self, record):
+        try:
+            conn = get_db(self.db_path)
+            conn.execute("""
+                INSERT INTO system_logs (logger, level, message)
+                VALUES (?, ?, ?)
+            """, (record.name, record.levelname, self.format(record)))
+            conn.commit()
+            conn.close()
+        except Exception:
+            # Silent failure to avoid recursive logging issues or blocking
+            pass
 
 
 DB_PATH = "rbrcs.db"
@@ -24,6 +45,7 @@ def get_db(db_path=None):
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")      # Better concurrent access
     conn.execute("PRAGMA foreign_keys=ON")
+    conn.execute("PRAGMA auto_vacuum = FULL")    # Reclaim space when rows are deleted
     conn.execute("PRAGMA cache_size = -2000")    # 2MB cache, reduces disk I/O
     conn.execute("PRAGMA temp_store = MEMORY")   # Keep temporary tables/indices in memory
     return conn
@@ -80,6 +102,17 @@ def init_db(db_path=None):
 
         CREATE INDEX IF NOT EXISTS idx_events_time
             ON events(timestamp DESC);
+
+        CREATE TABLE IF NOT EXISTS system_logs (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            logger        TEXT,
+            level         TEXT,
+            message       TEXT,
+            timestamp     DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_system_logs_time
+            ON system_logs(timestamp DESC);
     """)
 
     conn.commit()
@@ -130,6 +163,17 @@ def get_router(router_id, db_path=None):
     row = conn.execute("SELECT * FROM routers WHERE id = ?", (router_id,)).fetchone()
     conn.close()
     return dict(row) if row else None
+
+
+def delete_router(router_id, db_path=None):
+    """Delete a router and all its configs/events."""
+    conn = get_db(db_path)
+    conn.execute("DELETE FROM configs WHERE router_id = ?", (router_id,))
+    conn.execute("DELETE FROM events WHERE router_id = ?", (router_id,))
+    conn.execute("DELETE FROM routers WHERE id = ?", (router_id,))
+    conn.commit()
+    conn.close()
+
 
 
 def update_router_status(router_id, status, db_path=None):

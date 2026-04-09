@@ -12,8 +12,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-# Expose web dashboard port and syslog port
-EXPOSE 5000
+# Expose syslog port + web dashboard
 EXPOSE 514/udp
+EXPOSE 8080
 
 CMD ["python", "app.py"]

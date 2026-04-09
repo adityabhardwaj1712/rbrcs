@@ -49,10 +49,14 @@ def run_retention_cleanup(config=None, db_path=None):
     result = conn.execute("DELETE FROM events WHERE timestamp < ?", (cutoff,))
     events_deleted = result.rowcount
 
+    # ── System logs cleanup ───────────────────────────────
+    result = conn.execute("DELETE FROM system_logs WHERE timestamp < ?", (cutoff,))
+    sys_logs_deleted = result.rowcount
+
     conn.commit()
 
     # ── VACUUM to reclaim disk space ──────────────────────
-    if total_deleted > 0 or events_deleted > 0:
+    if total_deleted > 0 or events_deleted > 0 or sys_logs_deleted > 0:
         try:
             conn.execute("VACUUM")
         except Exception:
@@ -60,8 +64,8 @@ def run_retention_cleanup(config=None, db_path=None):
 
     conn.close()
 
-    if total_deleted > 0 or events_deleted > 0:
-        logger.info(f"Retention: {total_deleted} configs + {events_deleted} events cleaned")
+    if total_deleted > 0 or events_deleted > 0 or sys_logs_deleted > 0:
+        logger.info(f"Retention: {total_deleted} configs, {events_deleted} events, and {sys_logs_deleted} system logs cleaned")
     else:
         logger.debug("Retention: nothing to clean")
 

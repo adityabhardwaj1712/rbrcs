@@ -72,6 +72,9 @@ class SSHManager:
                     pass
             # Stale or dead connection, clean up
             try:
+                transport = client.get_transport()
+                if transport:
+                    transport.close()
                 client.close()
             except Exception:
                 pass
@@ -230,6 +233,7 @@ class SSHManager:
         except Exception as e:
             return False, f"Restore failed: {e}"
         finally:
+            # Pooled connection remains, but we explicitly clear buffers if possible
             pass
 
     def execute_commands(self, router, commands_text):

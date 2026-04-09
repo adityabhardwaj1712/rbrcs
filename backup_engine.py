@@ -16,13 +16,13 @@ SOLVES ALL 12 PROBLEMS:
   #12 No Backup Available  → first successful backup auto-sets golden
 """
 
-import os
 import logging
 from ssh_manager import SSHManager
 from database import (
     store_config, get_router, get_all_routers,
     update_router_status, log_event
 )
+from alerts import send_alert as _send_alert
 
 logger = logging.getLogger("rbrcs.backup")
 ssh = SSHManager()
@@ -153,15 +153,3 @@ def backup_all(db_path=None):
     routers = get_all_routers(db_path)
     return [backup_router(r["id"], "auto", db_path) for r in routers]
 
-
-def _send_alert(router, event_type, message):
-    """Send webhook alert if configured."""
-    try:
-        import yaml, requests
-        with open("config.yaml", "r", encoding="utf-8") as f:
-            cfg = yaml.safe_load(os.path.expandvars(f.read()))
-        url = cfg.get("alerts", {}).get("webhook_url", "")
-        if url:
-            requests.post(url, json={"text": f"🚨 RBRCS: {message}"}, timeout=5)
-    except Exception:
-        pass

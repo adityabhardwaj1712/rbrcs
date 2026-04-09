@@ -13,13 +13,13 @@ SOLVES:
   #12 No Backup Available    → clear error message, no crash
 """
 
-import os
 import logging
 from ssh_manager import SSHManager
 from database import (
     get_router, get_latest_config, get_config_by_id,
     update_router_status, log_event, store_config
 )
+from alerts import send_alert as _send_alert
 
 logger = logging.getLogger("rbrcs.restore")
 ssh = SSHManager()
@@ -183,16 +183,4 @@ def check_and_auto_restore(router_id, db_path=None):
         return {"was_reset": False, "restore_result": None}
 
 
-# ── Alert Helper ───────────────────────────────────────────
 
-def _send_alert(router, event_type, message):
-    """Send webhook alert if configured."""
-    try:
-        import yaml, requests
-        with open("config.yaml", "r", encoding="utf-8") as f:
-            cfg = yaml.safe_load(os.path.expandvars(f.read()))
-        url = cfg.get("alerts", {}).get("webhook_url", "")
-        if url:
-            requests.post(url, json={"text": message}, timeout=5)
-    except Exception:
-        pass
