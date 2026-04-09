@@ -1,0 +1,69 @@
+# ============================================================
+# RBRCS — Router Configuration Backup & Recovery System
+# Configuration File
+# ============================================================
+
+# --- System Settings ---
+system:
+  db_path: "data/rbrcs.db"                # SQLite database file
+  log_level: "INFO"                   # DEBUG, INFO, WARNING, ERROR
+  secret_key: "change-this-to-a-random-secret-key"
+
+# --- Syslog Listener ---
+syslog:
+  enabled: false                      # Set true if your router sends syslog
+  listen_host: "0.0.0.0"
+  listen_port: 514                    # Standard syslog port (may need root)
+
+# --- Health Check / Polling ---
+health_check:
+  interval_minutes: 10                # How often to check router status
+  backup_interval_minutes: 30         # Fallback: full config poll interval
+  ping_timeout_seconds: 5
+
+# --- Retention Policy ---
+retention:
+  keep_latest: 10                     # Always keep last N versions
+  daily_keep_days: 30                 # Keep 1/day for this many days
+  weekly_keep_weeks: 26               # Keep 1/week for this many weeks (6 months)
+  monthly_keep_months: 0              # Keep 1/month forever (0 = unlimited)
+  cleanup_hour: 3                     # Run cleanup at 3 AM daily
+
+# --- Web Dashboard ---
+dashboard:
+  host: "0.0.0.0"
+  port: 5000
+  debug: false
+
+# --- Alerts ---
+alerts:
+  webhook_url: ""                 # URL for Telegram/Slack/Discord webhook POSTs (e.g. factory reset)
+
+# --- Routers ---
+# Add your routers here. Supported device_types:
+#   cisco_ios, mikrotik_routeros, ubiquiti_edgeos, generic_linux
+#
+# Example:
+routers:
+  - id: "router-main"
+    name: "Main Gateway Router"
+    host: "192.168.1.1"
+    port: 22
+    device_type: "cisco_ios"
+    username: "admin"
+    password: "admin123"
+    # ssh_key_path: "/path/to/key"   # Optional: use SSH key instead of password
+    enable_password: ""               # Cisco enable password (if needed)
+    backup_commands:                   # Override default commands (optional)
+      - "show running-config"
+    restore_method: "scp"             # scp, tftp, or inline
+
+  # - id: "router-backup"
+  #   name: "Backup Router"
+  #   host: "192.168.1.2"
+  #   port: 22
+  #   device_type: "mikrotik_routeros"
+  #   username: "admin"
+  #   password: "admin123"
+  #   backup_commands:
+  #     - "/export"
