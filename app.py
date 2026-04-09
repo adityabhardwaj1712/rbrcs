@@ -13,8 +13,13 @@ import signal
 import threading
 import yaml
 import difflib
+import csv
+from io import StringIO
+import openpyxl
 
 from flask import Flask, jsonify, request, send_from_directory, session
+import ipaddress
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from database import (
     init_db, upsert_router, log_event, SQLiteHandler,
@@ -68,9 +73,9 @@ STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 app = Flask(__name__, static_folder=STATIC_DIR)
 app.config["SECRET_KEY"] = config.get("system", {}).get("secret_key", "rbrcs-default")
 
-# Disable Flask's verbose request logging for lighter output
+# Enable Flask request logging
 log = logging.getLogger("werkzeug")
-log.setLevel(logging.WARNING)
+log.setLevel(logging.INFO)
 
 
 # ── Static / Dashboard ────────────────────────────────────
@@ -88,6 +93,7 @@ def serve_static(filename):
 
 @app.before_request
 def require_auth():
+    print(f"REQUEST: {request.method} {request.path}", flush=True)
     if request.path.startswith("/static/") or request.path == "/":
         return
     if request.path in ["/api/login", "/api/auth/status"]:
@@ -114,13 +120,21 @@ def api_auth_status():
 @app.route("/api/login", methods=["POST"])
 def api_login():
     auth_cfg = config.get("auth", {})
-    payload = request.json or {}
+    payload = request.get_json(silent=True) or {}
     username = payload.get("username")
     password = payload.get("password")
     
-    if username == auth_cfg.get("admin_username") and password == auth_cfg.get("admin_password"):
+    admin_user = auth_cfg.get("admin_username")
+    admin_pass = auth_cfg.get("admin_password")
+    
+    print(f"DEBUG: Login attempt - User: {username}, Expected: {admin_user}", flush=True)
+    
+    if username == admin_user and password == admin_pass:
+        print(f"DEBUG: Login SUCCESS for {username}", flush=True)
         session["logged_in"] = True
         return jsonify({"success": True})
+    
+    print(f"DEBUG: Login FAILED - Provided pass length: {len(password) if password else 0}, Expected pass length: {len(admin_pass) if admin_pass else 0}", flush=True)
     return jsonify({"error": "Invalid credentials"}), 401
 
 @app.route("/api/logout", methods=["POST"])
@@ -139,7 +153,16 @@ def update_config_yaml_routers(routers_list):
         data = yaml_parser.load(f)
     if not data:
         data = {}
-    data["routers"] = routers_list
+    
+    # Strip database-internal fields
+    clean_routers = []
+    for r in routers_list:
+        clean_r = dict(r)
+        for key in ["status", "last_seen", "created_at", "updated_at"]:
+            clean_r.pop(key, None)
+        clean_routers.append(clean_r)
+        
+    data["routers"] = clean_routers
     with open(CONFIG_PATH, "w", encoding="utf-8") as f:
         yaml_parser.dump(data, f)
     # Sync runtime config variable and database
@@ -159,6 +182,86 @@ def api_routers():
         update_config_yaml_routers(routers)
         return jsonify({"success": True})
     return jsonify(get_all_routers())
+
+@app.route("/api/routers/upload", methods=["POST"])
+def api_routers_upload():
+    if "file" not in request.files:
+        return jsonify({"error": "No file uploaded"}), 400
+    file = request.files["file"]
+    filename = file.filename.lower()
+    
+    rows = []
+    try:
+        if filename.endswith(".csv"):
+            content = file.stream.read().decode("UTF-8-sig") # sig handles BOM
+            stream = StringIO(content, newline=None)
+            reader = csv.DictReader(stream)
+            rows = list(reader)
+        elif filename.endswith(".xlsx"):
+            wb = openpyxl.load_workbook(file, data_only=True)
+            sheet = wb.active
+            headers = [str(cell.value).strip().lower() for cell in sheet[1] if cell.value]
+            for row in sheet.iter_rows(min_row=2, values_only=True):
+                if any(row):
+                    rows.append(dict(zip(headers, row)))
+        else:
+            return jsonify({"error": "Only .csv or .xlsx allowed"}), 400
+            
+    except Exception as e:
+        logger.error(f"Upload parsing error: {str(e)}")
+        return jsonify({"error": f"File parsing failed: {str(e)}"}), 400
+
+    results = []
+    added_ids = []
+    
+    for idx, row in enumerate(rows, 1):
+        # Normalize and validate
+        rid = str(row.get("id") or "").strip()
+        host = str(row.get("host") or "").strip()
+        dtype = str(row.get("device_type") or "").strip()
+        
+        if not rid or not host or not dtype:
+            results.append({"row": idx, "id": rid, "status": "error", "message": "Missing required fields (id, host, device_type)"})
+            continue
+            
+        # Basic host validation (IP or DNS)
+        try:
+            if not any(c in host for c in ":[]"): # Simple check for non-IP hostname
+                 pass # DNS names are hard to validate without lookup
+        except Exception:
+            results.append({"row": idx, "id": rid, "status": "error", "message": "Invalid host format"})
+            continue
+
+        try:
+            router_data = {
+                "id": rid,
+                "name": str(row.get("name") or rid).strip(),
+                "host": host,
+                "port": int(row.get("port") or 22),
+                "device_type": dtype,
+                "username": str(row.get("username") or "").strip(),
+                "password": str(row.get("password") or "").strip(),
+                "ssh_key_path": str(row.get("ssh_key_path") or "").strip(),
+                "enable_password": str(row.get("enable_password") or "").strip()
+            }
+            upsert_router(router_data)
+            results.append({"row": idx, "id": rid, "name": router_data["name"], "status": "success", "message": "Imported/Updated"})
+            added_ids.append(rid)
+        except Exception as e:
+            results.append({"row": idx, "id": rid, "status": "error", "message": str(e)})
+        
+    routers = get_all_routers()
+    update_config_yaml_routers(routers)
+    return jsonify({
+        "success": True, 
+        "summary": {
+            "total": len(rows),
+            "success": len(added_ids),
+            "failed": len(rows) - len(added_ids)
+        },
+        "results": results,
+        "imported_ids": added_ids
+    })
 
 @app.route("/api/routers/<router_id>", methods=["GET", "DELETE"])
 def api_router_detail(router_id):
@@ -242,6 +345,39 @@ def api_push_config(router_id):
     success, output = ssh.execute_commands(router, commands)
     return jsonify({"success": success, "output": output})
 
+@app.route("/api/routers/mass-push", methods=["POST"])
+def api_mass_push_config():
+    payload = request.json or {}
+    router_ids = payload.get("router_ids", [])
+    commands_template = payload.get("commands", "")
+    
+    if not router_ids or not commands_template:
+        return jsonify({"error": "Missing router_ids or commands"}), 400
+        
+    def worker(rid):
+        r = get_router(rid)
+        if not r:
+            return rid, {"success": False, "output": "Router not found in system."}
+        
+        # Variable interpolation
+        cmds = commands_template
+        for key, value in r.items():
+            if value is not None:
+                cmds = cmds.replace(f"{{{{{key}}}}}", str(value))
+        
+        ssh = SSHManager()
+        success, output = ssh.execute_commands(r, cmds)
+        return rid, {"success": success, "output": output}
+
+    results = {}
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        future_to_rid = {executor.submit(worker, rid): rid for rid in router_ids}
+        for future in as_completed(future_to_rid):
+            rid, res = future.result()
+            results[rid] = res
+            
+    return jsonify({"success": True, "results": results})
+
 
 # ── API: Compliance Trigger ────────────────────────────────
 
@@ -257,6 +393,15 @@ def api_get_compliance(router_id):
     report = generate_security_report(router["device_type"], config_text)
     return jsonify(report)
 
+
+# ── API: Bootstrap Config Fetch ────────────────────────────
+
+@app.route("/api/get-config/<router_id>")
+def api_get_bootstrap_config(router_id):
+    cfg = get_latest_config(router_id)
+    if not cfg:
+        return "No configuration found for auto-recovery.", 404
+    return cfg["config_text"], 200, {'Content-Type': 'text/plain'}
 
 # ── API: Config Diff ─────────────────────────────────────
 

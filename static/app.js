@@ -1,5 +1,5 @@
 /* ============================================================
-   RBRCS Dashboard — Frontend Logic
+   RBRCS Command Center — Frontend Logic v2
    ============================================================ */
 
 const API = '';
@@ -60,13 +60,14 @@ function showToast(message, type = 'info') {
 
 async function apiFetch(path, options = {}) {
   try {
+    options.credentials = 'same-origin';
     const res = await fetch(API + path, options);
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
     setConnected(true);
     return data;
   } catch (e) {
-    if(!options.method || options.method === 'GET') setConnected(false);
+    if (!options.method || options.method === 'GET') setConnected(false);
     throw e;
   }
 }
@@ -82,30 +83,28 @@ function setConnected(state) {
 
 // ── Navigation (SPA) ───────────────────────────────────────
 
+const viewTitles = {
+  'dashboard': ['Dashboard Overview', 'Dashboard'],
+  'fleet': ['Router Fleet Management', 'Fleet'],
+  'add-router': ['Deploy New Router', 'Deploy'],
+  'terminal': ['Configuration Terminal', 'Terminal'],
+  'compliance': ['Security & Compliance Audit', 'Compliance']
+};
+
 function switchView(viewId) {
-  // Update nav links
   document.querySelectorAll('.nav-link').forEach(link => {
     link.classList.toggle('active', link.dataset.view === viewId);
   });
-  
-  // Title mapping
-  const titles = {
-    'dashboard': 'Dashboard Overview',
-    'fleet': 'Router Fleet Management',
-    'add-router': 'Deploy New Router',
-    'terminal': 'Configuration Terminal',
-    'compliance': 'Security & Compliance Audit'
-  };
-  document.getElementById('view-title').textContent = titles[viewId] || 'Dashboard';
 
-  // Toggle views
+  const [title, crumb] = viewTitles[viewId] || ['Dashboard', 'Dashboard'];
+  document.getElementById('view-title').textContent = title;
+  document.getElementById('view-breadcrumb').textContent = crumb;
+
   document.querySelectorAll('.view').forEach(view => {
     view.classList.toggle('active', view.id === `view-${viewId}`);
   });
 
-  if (viewId === 'compliance') {
-    refreshCompliance();
-  }
+  if (viewId === 'compliance') refreshCompliance();
 }
 
 // ── Clock ──────────────────────────────────────────────────
@@ -150,44 +149,67 @@ function renderStats(stats) {
 
 function renderRouters(routers) {
   const tbody = document.getElementById('router-tbody');
-  const select = document.getElementById('pc-router');
-  
-  // Update Dropdown
-  const prevSelected = select.value;
-  select.innerHTML = '<option value="">Select a router...</option>' + 
-    routers.map(r => `<option value="${r.id}">${escapeHtml(r.name)} (${r.host})</option>`).join('');
-  if (prevSelected) select.value = prevSelected;
+  const fleetTbody = document.getElementById('fleet-tbody');
+  const grid = document.getElementById('pc-routers-grid');
 
-  // Update Table
-  if (!routers.length) {
-    tbody.innerHTML = `<tr><td colspan="6"><div class="empty-state">
-      <div class="empty-state-icon">📡</div>
-      <div class="empty-state-text">No routers configured. Add one via the sidebar.</div>
-    </div></td></tr>`;
-    return;
+  // Terminal router grid (checkboxes with search data)
+  const prevChecked = Array.from(document.querySelectorAll('.pc-router-cb:checked')).map(cb => cb.value);
+  if (grid) {
+    if (!routers.length) {
+      grid.innerHTML = '<div style="color:var(--text-muted);padding:10px;grid-column:1/-1;">No routers available</div>';
+    } else {
+      grid.innerHTML = routers.map(r => `
+        <label class="router-selector-item" data-name="${escapeHtml(r.name).toLowerCase()}" data-host="${escapeHtml(r.host).toLowerCase()}">
+          <input type="checkbox" class="pc-router-cb" value="${r.id}" ${prevChecked.includes(r.id) ? 'checked' : ''} onchange="updateRouterCount()">
+          <span class="router-selector-dot ${r.status || 'unknown'}"></span>
+          <span class="router-selector-name">${escapeHtml(r.name)}</span>
+          <span class="router-selector-host">${escapeHtml(r.host)}</span>
+        </label>
+      `).join('');
+    }
+    updateRouterCount();
   }
-  tbody.innerHTML = routers.map(r => `
+
+  const buildRow = (r) => {
+    const safeName = escapeHtml(r.name).replace(/'/g, "&#39;").replace(/"/g, "&quot;");
+    const safeId = escapeHtml(r.id).replace(/'/g, "&#39;").replace(/"/g, "&quot;");
+    return `
     <tr>
       <td>
         <div class="router-name">${escapeHtml(r.name)}</div>
         <div class="router-host">${escapeHtml(r.host)}:${r.port || 22}</div>
       </td>
-      <td><span class="status-badge ${r.status || 'unknown'}">${r.status || 'unknown'}</span></td>
-      <td>${escapeHtml(r.device_type)}</td>
-      <td>${r.backup_count || 0}</td>
-      <td>${timeAgo(r.last_backup)}</td>
+      <td><span class="badge badge-${r.status || 'unknown'}">${r.status || 'unknown'}</span></td>
+      <td style="font-size:12px;color:var(--text-secondary)">${escapeHtml(r.device_type)}</td>
+      <td style="font-family:'JetBrains Mono',monospace;font-size:12px;">${r.backup_count || 0}</td>
+      <td style="font-size:12px;color:var(--text-muted)">${timeAgo(r.last_backup)}</td>
       <td>
         <div class="action-cell">
-          <button class="btn btn-sm btn-primary" onclick="triggerBackup('${r.id}')" title="Backup Now">⬇ Backup</button>
-          <button class="btn btn-sm" onclick="viewHistory('${r.id}', '${escapeHtml(r.name)}')" title="View History">📋 History</button>
-          <button class="btn btn-sm btn-danger" onclick="deleteRouter('${r.id}', '${escapeHtml(r.name)}')" title="Delete Router">🗑</button>
+          <button class="btn btn-sm btn-success" onclick="triggerBackup('${safeId}')" title="Backup Now">⬇ Backup</button>
+          <button class="btn btn-sm" onclick="viewHistory('${safeId}', '${safeName}')" title="History">📋</button>
+          <button class="btn btn-sm btn-danger" onclick="deleteRouter('${safeId}', '${safeName}')" title="Delete">🗑</button>
         </div>
       </td>
     </tr>
-  `).join('');
+  `;
+  };
+
+  if (!routers.length) {
+    const emptyRow = `<tr><td colspan="6"><div class="empty-state">
+      <div class="empty-state-icon">📡</div>
+      <div class="empty-state-text">No routers configured. Deploy one to get started.</div>
+    </div></td></tr>`;
+    tbody.innerHTML = emptyRow;
+    if (fleetTbody) fleetTbody.innerHTML = emptyRow;
+    return;
+  }
+
+  const rows = routers.map(buildRow).join('');
+  tbody.innerHTML = rows;
+  if (fleetTbody) fleetTbody.innerHTML = rows;
 }
 
-// ── Render: Events, Jobs, Retention ────────────────────────
+// ── Render: Events ─────────────────────────────────────────
 
 function renderEvents(events) {
   const list = document.getElementById('event-list');
@@ -208,10 +230,12 @@ function renderEvents(events) {
   `).join('');
 }
 
+// ── Render: Jobs & Retention ───────────────────────────────
+
 function renderJobs(jobs) {
   const tbody = document.getElementById('jobs-tbody');
   if (!jobs.length) {
-    tbody.innerHTML = `<tr><td colspan="2" class="empty-state">No scheduled jobs</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="2" style="text-align:center;padding:20px;color:var(--text-muted)">No scheduled jobs</td></tr>`;
     return;
   }
   tbody.innerHTML = jobs.map(j => `
@@ -241,47 +265,38 @@ async function triggerBackup(routerId) {
   }
 }
 
-async function triggerRestore(routerId, routerName) {
-  if (!confirm(`⚠️ Restore ${routerName} to golden/last-good config?\n\nThis will push config to the live device.`)) return;
-  showToast('Starting restore…', 'info');
-  try {
-    const res = await apiFetch(`/api/restore/${routerId}`);
-    if (res.success) showToast(res.message || 'Restore complete', 'success');
-    else showToast(res.message || 'Restore failed', 'error');
-    refreshDashboard();
-  } catch (e) {
-    showToast('Restore request failed: ' + e.message, 'error');
-  }
-}
-
 async function deleteRouter(routerId, routerName) {
-  if (!confirm(`🧨 DANGER: Delete router ${routerName}?\n\nThis removes all history, backups, and settings permanently.`)) return;
+  // Decode HTML entities from safeName for the confirm dialog
+  const decodeHtml = (html) => {
+    var txt = document.createElement("textarea");
+    txt.innerHTML = html;
+    return txt.value;
+  };
+  if (!confirm(`🧨 Delete router "${decodeHtml(routerName)}"?\n\nThis removes all history and backups permanently.`)) return;
   showToast('Deleting router...', 'info');
   try {
-    const res = await apiFetch(`/api/routers/${routerId}`, { method: 'DELETE' });
-    if(res.success) showToast('Router deleted', 'success');
+    const res = await apiFetch(`/api/routers/${encodeURIComponent(decodeHtml(routerId))}`, { method: 'DELETE' });
+    if (res.success) showToast('Router deleted', 'success');
     refreshDashboard();
-  } catch(e) {
+  } catch (e) {
     showToast('Delete failed: ' + e.message, 'error');
   }
 }
 
-// ── Form Submissions ───────────────────────────────────────
+// ── Add Router Form ────────────────────────────────────────
 
 document.getElementById('add-router-form')?.addEventListener('submit', async (e) => {
   e.preventDefault();
   const payload = {
-    id: document.getElementById('ar-id').value,
-    name: document.getElementById('ar-name').value,
-    host: document.getElementById('ar-host').value,
-    port: parseInt(document.getElementById('ar-port').value),
+    id: document.getElementById('ar-id').value.trim(),
+    name: document.getElementById('ar-name').value.trim(),
+    host: document.getElementById('ar-host').value.trim(),
+    port: parseInt(document.getElementById('ar-port').value) || 22,
     device_type: document.getElementById('ar-type').value,
-    username: document.getElementById('ar-user').value || null,
+    username: document.getElementById('ar-user').value.trim() || null,
     password: document.getElementById('ar-pass').value || null,
     enable_password: document.getElementById('ar-enable').value || null
   };
-  
-  // Clean up empty optional fields
   Object.keys(payload).forEach(k => payload[k] === null && delete payload[k]);
 
   showToast('Saving router...', 'info');
@@ -291,7 +306,7 @@ document.getElementById('add-router-form')?.addEventListener('submit', async (e)
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
     });
-    if(res.success) {
+    if (res.success) {
       showToast('Router added successfully', 'success');
       e.target.reset();
       refreshDashboard();
@@ -302,38 +317,198 @@ document.getElementById('add-router-form')?.addEventListener('submit', async (e)
   }
 });
 
+// ── Mass Import ────────────────────────────────────────────
+
+function downloadCsvTemplate() {
+  const csv = "id,name,host,port,device_type,username,password\nhq-rt-01,HQ Router,192.168.1.1,22,mikrotik_routeros,admin,ChangeMe123\n";
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(blob);
+  link.download = 'rbrcs_routers_template.csv';
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+}
+
+document.getElementById('bulk-upload-form')?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const fileInput = document.getElementById('bulk-file');
+  if (!fileInput.files.length) return;
+
+  const btn = document.getElementById('bulk-submit-btn');
+  btn.disabled = true;
+  btn.textContent = '⌛ Processing...';
+
+  const formData = new FormData();
+  formData.append('file', fileInput.files[0]);
+
+  showToast('Uploading and validating routers...', 'info');
+  try {
+    const res = await fetch(API + '/api/routers/upload', { method: 'POST', body: formData });
+    const data = await res.json();
+    if (res.ok && data.success) {
+      showImportSummary(data);
+      e.target.reset();
+      refreshDashboard();
+    } else {
+      showToast('Import failed: ' + (data.error || 'Unknown error'), 'error');
+    }
+  } catch (err) {
+    showToast('Connection failed: ' + err.message, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '📥 Import Routers';
+  }
+});
+
+function showImportSummary(data) {
+  const { summary, results, imported_ids } = data;
+  let html = `
+    <div class="import-summary-header">
+      <div class="summary-stat">
+        <div class="stat-value">${summary.total}</div>
+        <div class="stat-label">Total Rows</div>
+      </div>
+      <div class="summary-stat" style="color:var(--accent-green)">
+        <div class="stat-value" style="color:var(--accent-green)">${summary.success}</div>
+        <div class="stat-label">Success</div>
+      </div>
+      <div class="summary-stat" style="color:var(--accent-red)">
+        <div class="stat-value" style="color:var(--accent-red)">${summary.failed}</div>
+        <div class="stat-label">Failed</div>
+      </div>
+    </div>
+    <div style="max-height:260px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--radius);">
+      <table class="data-table" style="margin:0;font-size:12px;">
+        <thead><tr><th>Row</th><th>ID</th><th>Status</th><th>Message</th></tr></thead>
+        <tbody>
+          ${results.map(r => `
+            <tr>
+              <td>${r.row}</td>
+              <td style="font-family:monospace;">${r.id || '—'}</td>
+              <td><span class="badge badge-${r.status === 'success' ? 'online' : 'error'}">${r.status}</span></td>
+              <td style="color:var(--text-muted)">${escapeHtml(r.message)}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    </div>
+  `;
+
+  if (imported_ids && imported_ids.length > 0) {
+    html += `
+      <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:20px;">
+        <button class="btn" onclick="closeModal()">Close</button>
+        <button class="btn btn-primary" onclick="redirectToTerminal(${JSON.stringify(imported_ids)})">⚡ Configure These Routers</button>
+      </div>
+    `;
+  } else {
+    html += `<div style="margin-top:20px;"><button class="btn" style="width:100%" onclick="closeModal()">Close</button></div>`;
+  }
+
+  openModal('📥 Import Results', html);
+}
+
+function redirectToTerminal(routerIds) {
+  closeModal();
+  switchView('terminal');
+  setTimeout(() => {
+    document.querySelectorAll('.pc-router-cb').forEach(cb => {
+      cb.checked = routerIds.includes(cb.value);
+    });
+    updateRouterCount();
+    showToast(`Pre-selected ${routerIds.length} routers for configuration.`, 'info');
+  }, 150);
+}
+
+// ── Mass Push ──────────────────────────────────────────────
+
+function updateRouterCount() {
+  const total = document.querySelectorAll('.pc-router-cb').length;
+  const checked = document.querySelectorAll('.pc-router-cb:checked').length;
+  const badge = document.getElementById('router-count-badge');
+  if (badge) badge.textContent = `${checked} selected`;
+  const label = document.getElementById('router-dropdown-label');
+  if (label) {
+    if (checked === 0) label.textContent = 'Select routers...';
+    else if (checked === total) label.textContent = `All ${total} routers selected`;
+    else label.textContent = `${checked} of ${total} routers selected`;
+  }
+}
+
+function toggleRouterDropdown() {
+  const dd = document.getElementById('router-dropdown');
+  if (dd) dd.classList.toggle('open');
+}
+
+// Close dropdown when clicking outside
+document.addEventListener('click', (e) => {
+  const dd = document.getElementById('router-dropdown');
+  if (dd && dd.classList.contains('open') && !dd.contains(e.target)) {
+    dd.classList.remove('open');
+  }
+});
+
+function toggleAllRouters() {
+  const visible = document.querySelectorAll('.router-selector-item:not(.hidden) .pc-router-cb');
+  const allChecked = Array.from(visible).every(cb => cb.checked);
+  visible.forEach(cb => cb.checked = !allChecked);
+  document.getElementById('btn-toggle-routers').textContent = allChecked ? 'Select All' : 'Deselect All';
+  updateRouterCount();
+}
+
+function clearTerminal() {
+  const termOut = document.getElementById('terminal-out');
+  if (termOut) {
+    termOut.textContent = 'RBRCS Terminal v2.0\nReady. Select routers and enter commands to execute.\n' + '─'.repeat(52) + '\n';
+  }
+}
+
 document.getElementById('push-config-form')?.addEventListener('submit', async (e) => {
   e.preventDefault();
-  const routerId = document.getElementById('pc-router').value;
+  const routerIds = Array.from(document.querySelectorAll('.pc-router-cb:checked')).map(cb => cb.value);
   const commands = document.getElementById('pc-commands').value;
   const termOut = document.getElementById('terminal-out');
   const btn = document.getElementById('btn-push-exec');
-  
-  if(!routerId || !commands.trim()) return;
-  
-  if(!confirm(`⚠️ Push this configuration to the live device?`)) return;
+
+  if (!routerIds.length) { showToast('Select at least one router!', 'error'); return; }
+  if (!commands.trim()) return;
+  if (!confirm(`⚠️ Push configuration to ${routerIds.length} live device(s)?`)) return;
 
   btn.disabled = true;
-  termOut.textContent = "Connecting and pushing config...\n";
-  
+  termOut.textContent = `⚡ Targeting ${routerIds.length} routers...\n🚀 Initializing parallel execution engine...\n\n`;
+
   try {
-    const res = await apiFetch(`/api/routers/${routerId}/push`, {
+    const res = await apiFetch('/api/routers/mass-push', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ commands })
+      body: JSON.stringify({ router_ids: routerIds, commands: commands })
     });
-    termOut.textContent += (res.output || "No output returned.");
-    if(res.success) showToast('Config pushed successfully', 'success');
-    else showToast('Config push completed with errors', 'error');
+
+    if (res.results) {
+      termOut.textContent = `✅ Execution complete — ${routerIds.length} routers.\n${'═'.repeat(52)}\n\n`;
+      for (const [rid, rdata] of Object.entries(res.results)) {
+        const icon = rdata.success ? '🟢' : '🔴';
+        termOut.textContent += `${icon} [${rid}] ${rdata.success ? 'SUCCESS' : 'FAILED'}\n`;
+        termOut.textContent += `${'─'.repeat(52)}\n`;
+        termOut.textContent += `${(rdata.output || 'No output.').trim()}\n`;
+        termOut.textContent += `${'═'.repeat(52)}\n\n`;
+      }
+      showToast(`Push complete: ${routerIds.length} routers processed`, 'success');
+      termOut.scrollTop = termOut.scrollHeight;
+    } else {
+      showToast('Push rejected by server', 'error');
+      termOut.textContent += '\n❌ Server rejected the request.';
+    }
   } catch (err) {
-    termOut.textContent += `\nError: ${err.message}`;
-    showToast('Failed to push config: ' + err.message, 'error');
+    termOut.textContent += `\n❌ Error: ${err.message}`;
+    showToast('Execution failed: ' + err.message, 'error');
   } finally {
     btn.disabled = false;
   }
 });
 
-// ── Bind Nav Links ─────────────────────────────────────────
+// ── Nav Links ──────────────────────────────────────────────
 
 document.querySelectorAll('.nav-link').forEach(link => {
   link.addEventListener('click', (e) => {
@@ -370,7 +545,7 @@ async function viewHistory(routerId, routerName) {
       </ul>
     `);
   } catch (e) {
-    setModalBody(`<div class="empty-state"><div class="empty-state-text">Failed to load history: ${e.message}</div></div>`);
+    setModalBody(`<div class="empty-state"><div class="empty-state-text">Failed: ${e.message}</div></div>`);
   }
 }
 
@@ -380,16 +555,15 @@ async function viewConfig(routerId, configId) {
   openModal(`🔧 Config #${configId}`, '<div class="skeleton" style="height:300px"></div>');
   try {
     const cfg = await apiFetch(`/api/routers/${routerId}/config/${configId}`);
-    const configText = cfg.config_text || 'No config data';
     setModalBody(`
-      <div style="margin-bottom:12px;display:flex;gap:8px;align-items:center;">
-        <span style="font-size:12px;color:var(--text-muted)">Hash: <code>${cfg.config_hash || '—'}</code> · Size: ${formatBytes(cfg.config_size)} · ${cfg.timestamp || ''}</span>
+      <div style="margin-bottom:12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+        <span style="font-size:11px;color:var(--text-muted)">Hash: <code>${cfg.config_hash || '—'}</code> · Size: ${formatBytes(cfg.config_size)} · ${cfg.timestamp || ''}</span>
         <button class="btn btn-sm" onclick="diffWithPrevious('${routerId}', ${configId})">📊 Diff vs Previous</button>
       </div>
-      <div class="config-viewer"><pre>${escapeHtml(configText)}</pre></div>
+      <div class="config-viewer"><pre>${escapeHtml(cfg.config_text || 'No config data')}</pre></div>
     `);
   } catch (e) {
-    setModalBody(`<div class="empty-state"><div class="empty-state-text">Failed to load config: ${e.message}</div></div>`);
+    setModalBody(`<div class="empty-state"><div class="empty-state-text">Failed: ${e.message}</div></div>`);
   }
 }
 
@@ -408,8 +582,8 @@ async function diffWithPrevious(routerId, configId) {
       return escapeHtml(line);
     }).join('\n');
     setModalBody(`
-      <div style="margin-bottom:12px;font-size:12px;color:var(--text-muted)">
-        Comparing config #${data.current_id} vs #${data.previous_id} ·
+      <div style="margin-bottom:12px;font-size:11px;color:var(--text-muted)">
+        Comparing #${data.current_id} vs #${data.previous_id} ·
         <span style="color:var(--accent-green)">+${data.additions}</span> /
         <span style="color:var(--accent-red)">-${data.deletions}</span> lines
       </div>
@@ -421,7 +595,7 @@ async function diffWithPrevious(routerId, configId) {
 }
 
 async function restoreSpecific(routerId, configId, routerName) {
-  if (!confirm(`Restore ${routerName} to backup #${configId}?`)) return;
+  if (!confirm(`Restore "${routerName}" to backup #${configId}?`)) return;
   showToast('Starting restore…', 'info');
   try {
     const res = await apiFetch(`/api/restore/${routerId}?config_id=${configId}`);
@@ -436,7 +610,6 @@ async function restoreSpecific(routerId, configId, routerName) {
 // ── Modal Helpers ──────────────────────────────────────────
 
 function openModal(title, body) {
-  document.getElementById('modal-title').textContent = '';
   document.getElementById('modal-title').innerHTML = title;
   document.getElementById('modal-body').innerHTML = body;
   document.getElementById('modal-overlay').classList.add('active');
@@ -450,24 +623,24 @@ function closeModal() {
   document.getElementById('modal-overlay').classList.remove('active');
 }
 
-document.addEventListener('click', (e) => {
-  if (e.target.id === 'modal-overlay') closeModal();
-});
-
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') closeModal();
 });
 
-// ── Auth & Compliance ──────────────────────────────────────
+// ── Auth ───────────────────────────────────────────────────
 
 document.getElementById('login-form')?.addEventListener('submit', async (e) => {
   e.preventDefault();
   const user = document.getElementById('login-user').value;
   const pass = document.getElementById('login-pass').value;
+  const errorEl = document.getElementById('login-error');
+  errorEl.textContent = '';
+
   try {
     const res = await fetch(API + '/api/login', {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({username: user, password: pass})
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: user, password: pass })
     });
     if (res.ok) {
       document.getElementById('login-overlay').style.display = 'none';
@@ -475,10 +648,11 @@ document.getElementById('login-form')?.addEventListener('submit', async (e) => {
       refreshDashboard();
       pollTimer = setInterval(refreshDashboard, POLL_INTERVAL);
     } else {
-      document.getElementById('login-error').textContent = 'Invalid credentials';
+      const data = await res.json();
+      errorEl.textContent = data.error || 'Invalid credentials';
     }
-  } catch(e) {
-    document.getElementById('login-error').textContent = 'Login server error';
+  } catch (err) {
+    errorEl.textContent = 'Unable to connect to server';
   }
 });
 
@@ -487,36 +661,37 @@ async function logout() {
   location.reload();
 }
 
+// ── Compliance ─────────────────────────────────────────────
+
 async function refreshCompliance() {
   const tbody = document.getElementById('compliance-tbody');
-  tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;">Scanning...</td></tr>';
+  tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:24px;">🔄 Scanning…</td></tr>';
   try {
     const routers = await apiFetch('/api/routers');
     if (!routers.length) {
-      tbody.innerHTML = '<tr><td colspan="6" class="empty-state">No routers to scan</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="6"><div class="empty-state"><div class="empty-state-text">No routers to scan</div></div></td></tr>';
       return;
     }
-    
+
     let html = '';
     for (const r of routers) {
       try {
         const rep = await apiFetch(`/api/routers/${r.id}/compliance`);
-        const g = rep.grade || 'N/A';
         html += `<tr>
           <td><div class="router-name">${escapeHtml(r.name)}</div></td>
-          <td><span class="grade-badge grade-${g}">${g}</span></td>
-          <td>${rep.score} / 100</td>
-          <td style="color:var(--accent-green)">${rep.passed ? rep.passed.length : 0} passed</td>
-          <td style="color:var(--accent-red)">${rep.failed ? rep.failed.length : 0} failed</td>
+          <td><span class="grade-badge grade-${rep.grade}">${rep.grade}</span></td>
+          <td style="font-family:'JetBrains Mono',monospace;">${rep.score}/100</td>
+          <td style="color:var(--accent-green)">${rep.passed ? rep.passed.length : 0}</td>
+          <td style="color:var(--accent-red)">${rep.failed ? rep.failed.length : 0}</td>
           <td><button class="btn btn-sm" onclick="viewComplianceReport('${r.id}', '${escapeHtml(r.name)}')">View Report</button></td>
         </tr>`;
       } catch (e) {
-        html += `<tr><td colspan="6">Failed to evaluate ${escapeHtml(r.name)}</td></tr>`;
+        html += `<tr><td colspan="6" style="color:var(--accent-red)">Failed: ${escapeHtml(r.name)}</td></tr>`;
       }
     }
     tbody.innerHTML = html;
   } catch (e) {
-    showToast('Failed to load compliance data: ' + e.message, 'error');
+    showToast('Compliance scan failed: ' + e.message, 'error');
   }
 }
 
@@ -524,30 +699,43 @@ async function viewComplianceReport(routerId, routerName) {
   openModal(`🛡️ Security Report — ${routerName}`, '<div class="skeleton" style="height:300px"></div>');
   try {
     const rep = await apiFetch(`/api/routers/${routerId}/compliance`);
-    
-    let html = `<div style="display:flex; justify-content:space-between; margin-bottom: 20px;">
-      <div><h2 style="margin-bottom:5px;">Security Score: ${rep.score} / 100</h2></div>
-      <div><span class="grade-badge grade-${rep.grade}" style="width: 40px; height: 40px; font-size: 20px;">${rep.grade}</span></div>
-    </div>`;
-    
-    if(rep.failed && rep.failed.length > 0) {
-      html += `<h4 style="margin-top: 15px; margin-bottom: 10px;">🔥 Failed Checks</h4><ul style="color:var(--accent-red); margin-bottom: 20px; line-height: 1.6; list-style:none;">`;
+    let html = `
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:24px;">
+        <div>
+          <div style="font-size:14px;color:var(--text-secondary);margin-bottom:4px;">Security Score</div>
+          <div style="font-size:28px;font-weight:800;">${rep.score} / 100</div>
+        </div>
+        <span class="grade-badge grade-${rep.grade}" style="width:48px;height:48px;font-size:22px;">${rep.grade}</span>
+      </div>
+    `;
+
+    if (rep.failed && rep.failed.length > 0) {
+      html += `<div style="margin-bottom:8px;font-weight:600;font-size:13px;color:var(--accent-red);">🔥 Failed Checks (${rep.failed.length})</div>`;
+      html += `<ul style="list-style:none;margin-bottom:20px;">`;
       rep.failed.forEach(f => {
-        html += `<li style="padding: 6px; background: rgba(255,51,102,.05); border-left: 3px solid var(--accent-red); margin-bottom: 8px;">
-          <strong>[${escapeHtml(f.id)}]</strong> ${escapeHtml(f.description)}
+        html += `<li style="padding:8px 12px;background:rgba(239,68,68,.05);border-left:3px solid var(--accent-red);margin-bottom:6px;border-radius:0 var(--radius-sm) var(--radius-sm) 0;font-size:12px;color:var(--text-secondary);">
+          <strong style="color:var(--accent-red)">[${escapeHtml(f.id)}]</strong> ${escapeHtml(f.description)}
         </li>`;
       });
       html += `</ul>`;
-    } else {
-      html += `<div style="padding: 10px; background: rgba(0,255,136,.05); border-left: 3px solid var(--accent-green); color:var(--accent-green); margin-bottom: 20px;">All checks passed!</div>`;
     }
-    
+
+    if (rep.passed && rep.passed.length > 0) {
+      html += `<div style="margin-bottom:8px;font-weight:600;font-size:13px;color:var(--accent-green);">✓ Passed Checks (${rep.passed.length})</div>`;
+      html += `<ul style="list-style:none;">`;
+      rep.passed.forEach(p => {
+        html += `<li style="padding:6px 12px;font-size:12px;color:var(--text-muted);border-left:2px solid rgba(16,185,129,.3);margin-bottom:4px;">
+          [${escapeHtml(p.id)}] ${escapeHtml(p.description)}
+        </li>`;
+      });
+      html += `</ul>`;
+    }
+
     setModalBody(html);
   } catch (e) {
     setModalBody('Failed to load report: ' + e.message);
   }
 }
-
 
 // ── Init ───────────────────────────────────────────────────
 
@@ -559,11 +747,43 @@ document.addEventListener('DOMContentLoaded', async () => {
       return;
     }
   } catch (e) {
-    console.warn("Auth check failed, assuming local dev or no auth", e);
+    console.warn('Auth check failed, assuming no auth', e);
   }
-  
+
   document.getElementById('login-overlay').style.display = 'none';
   document.getElementById('app-layout').style.display = 'flex';
   refreshDashboard();
   pollTimer = setInterval(refreshDashboard, POLL_INTERVAL);
 });
+
+// ── Router Search Filter ───────────────────────────────────
+
+document.getElementById('router-search')?.addEventListener('input', (e) => {
+  const query = e.target.value.toLowerCase().trim();
+  document.querySelectorAll('.router-selector-item').forEach(item => {
+    const name = item.dataset.name || '';
+    const host = item.dataset.host || '';
+    if (!query || name.includes(query) || host.includes(query)) {
+      item.classList.remove('hidden');
+    } else {
+      item.classList.add('hidden');
+    }
+  });
+});
+
+// ── Import Dropzone Drag Effects ───────────────────────────
+
+const dropzone = document.getElementById('import-dropzone');
+if (dropzone) {
+  ['dragenter', 'dragover'].forEach(evt => {
+    dropzone.addEventListener(evt, (e) => {
+      e.preventDefault();
+      dropzone.classList.add('drag-over');
+    });
+  });
+  ['dragleave', 'drop'].forEach(evt => {
+    dropzone.addEventListener(evt, () => {
+      dropzone.classList.remove('drag-over');
+    });
+  });
+}

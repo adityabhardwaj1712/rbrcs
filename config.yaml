@@ -13,7 +13,7 @@ system:
 auth:
   enabled: true
   admin_username: "admin"
-  admin_password: "password"          # Default password, change in production!
+  admin_password: "admin"          # Default password, change in production!
 
 # --- Syslog Listener ---
 syslog:
@@ -47,25 +47,33 @@ alerts:
 #
 # Example:
 routers:
-  - id: "router-main"
-    name: "Main Gateway Router"
-    host: "192.168.1.1"
-    port: 22
-    device_type: "cisco_ios"
-    username: "admin"
-    password: "${ROUTER_PASSWORD}"
-    # ssh_key_path: "/path/to/key"   # Optional: use SSH key instead of password
-    enable_password: ""               # Cisco enable password (if needed)
-    backup_commands:                   # Override default commands (optional)
-      - "show running-config"
-    restore_method: "scp"             # scp, tftp, or inline
-
-  # - id: "router-backup"
-  #   name: "Backup Router"
-  #   host: "192.168.1.2"
-  #   port: 22
-  #   device_type: "mikrotik_routeros"
-  #   username: "admin"
-  #   password: "admin123"
-  #   backup_commands:
-  #     - "/export"
+- id: router-main
+  name: Main Gateway Router
+  host: 192.168.1.1
+  port: 22
+  device_type: cisco_ios
+  username: admin
+  password: ${ROUTER_PASSWORD}
+  ssh_key_path: ''
+  enable_password: ''
+  last_backup:
+- id: nfbzkj
+  name: skafa
+  host: 192.168.122.3
+  port: 22
+  device_type: mikrotik_routeros
+  username: amsan
+  password: ''
+  ssh_key_path: ''
+  enable_password: ''
+  last_backup:
+- id: abcd-efgh
+  name: test
+  host: 192.168.122.0
+  port: 22
+  device_type: mikrotik_routeros
+  username: admin
+  password: ''
+  ssh_key_path: ''
+  enable_password: ''
+  last_backup:

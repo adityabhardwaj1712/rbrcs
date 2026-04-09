@@ -1,0 +1,34 @@
+! =====================================================================
+! RBRCS Dummy Configuration Script
+! Purpose: Used for testing drift detection and compliance auditing
+! =====================================================================
+
+hostname hq-core-dummy
+!
+! Vlan configuration
+vlan 10
+ name UserNetwork
+vlan 20
+ name GuestNetwork
+!
+! Interface configuration
+interface GigabitEthernet0/1
+ description UPLINK-TO-ISP
+ ip address 10.0.0.2 255.255.255.252
+ no shutdown
+!
+interface GigabitEthernet0/2
+ description LAN-ACCESS
+ switchport mode access
+ switchport access vlan 10
+ no shutdown
+!
+! Authentication and Security Issues (To trigger Compliance Scanners)
+enable password cisco       ! Fails: Plaintext password
+telnet server enable        ! Fails: Insecure unencrypted protocol active
+!
+! Missing critical setups:
+! No NTP server configured
+! No robust logging configured
+
+! End
