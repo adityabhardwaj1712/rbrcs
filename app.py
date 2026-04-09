@@ -40,9 +40,10 @@ CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config.yaml")
 
 
 def load_config():
-    """Load config.yaml."""
+    """Load config.yaml with env var expansion."""
     with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f)
+        expanded = os.path.expandvars(f.read())
+        return yaml.safe_load(expanded)
 
 
 config = load_config()

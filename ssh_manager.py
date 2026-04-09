@@ -44,8 +44,17 @@ class SSHManager:
     """Manages SSH connections to routers with pooling."""
     _pool = {}  # router_id -> (client, timestamp)
 
-    def __init__(self, timeout=30):
-        self.timeout = timeout
+    def __init__(self, timeout=None):
+        if timeout is None:
+            try:
+                import yaml, os
+                with open("config.yaml", "r", encoding="utf-8") as f:
+                    cfg = yaml.safe_load(os.path.expandvars(f.read()))
+                self.timeout = cfg.get("health_check", {}).get("ping_timeout_seconds", 30)
+            except Exception:
+                self.timeout = 30
+        else:
+            self.timeout = timeout
 
     def _connect(self, router):
         """Create an SSH connection to a router or return a cached one."""

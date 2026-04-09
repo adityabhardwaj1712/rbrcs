@@ -7,7 +7,7 @@
 system:
   db_path: "data/rbrcs.db"                # SQLite database file
   log_level: "INFO"                   # DEBUG, INFO, WARNING, ERROR
-  secret_key: "change-this-to-a-random-secret-key"
+  secret_key: "rbrcs-a8f3b1q9x7y2z0"
 
 # --- Syslog Listener ---
 syslog:
@@ -51,7 +51,7 @@ routers:
     port: 22
     device_type: "cisco_ios"
     username: "admin"
-    password: "admin123"
+    password: "${ROUTER_PASSWORD}"
     # ssh_key_path: "/path/to/key"   # Optional: use SSH key instead of password
     enable_password: ""               # Cisco enable password (if needed)
     backup_commands:                   # Override default commands (optional)

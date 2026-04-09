@@ -6,7 +6,7 @@ services:
     container_name: rbrcs
     ports:
       - "5000:5000"
-      - "514:514/udp"
+      - "1514:514/udp"
     volumes:
       - ./data:/app/data
       - ./config.yaml:/app/config.yaml
