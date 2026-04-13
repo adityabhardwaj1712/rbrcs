@@ -16,4 +16,4 @@ COPY . .
 EXPOSE 514/udp
 EXPOSE 8080
 
-CMD ["python", "app.py"]
+CMD ["python", "rbrcs_app_standalone.py"]

@@ -234,7 +234,7 @@
               <div class="form-group">
                 <label for="ar-type">Device Type</label>
                 <select id="ar-type">
-                  <option value="mikrotik_routeros">MikroTik RouterOS</option>
+                  <option value="mikrotik_routeros" selected>MikroTik RouterOS</option>
                   <option value="cisco_ios">Cisco IOS</option>
                   <option value="ubiquiti_edgeos">Ubiquiti EdgeOS</option>
                   <option value="generic_linux">Generic Linux</option>
@@ -256,8 +256,9 @@
                 <label for="ar-enable">Enable Password (Cisco)</label>
                 <input type="password" id="ar-enable" placeholder="Optional">
               </div>
-              <div class="form-actions">
-                <button type="submit" class="btn btn-primary btn-lg">💾 Save Router</button>
+              <div class="form-actions" style="gap: 12px; display: flex;">
+                <button type="submit" class="btn btn-primary btn-lg" style="flex: 2;">💾 Save Router</button>
+                <button type="button" class="btn btn-outline btn-lg" style="flex: 1;" onclick="testConnection()">⚡ Test</button>
               </div>
             </form>
           </div>

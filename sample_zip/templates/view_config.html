@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}Config #{{ config.id }}{% endblock %}
+{% block page_title %}Config #{{ config.id }}{% endblock %}
+{% block page_subtitle %}{{ router.name }} — {{ config.timestamp }}{% endblock %}
+
+{% block top_actions %}
+<a href="{{ url_for('api_download_config', config_id=config.id) }}" class="btn btn-outline" id="btn-download-config">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+        <polyline points="7 10 12 15 17 10"/>
+        <line x1="12" y1="15" x2="12" y2="3"/>
+    </svg>
+    Download
+</a>
+<button class="btn btn-warning" onclick="restoreConfig('{{ router.id }}', {{ config.id }})" id="btn-restore-this">
+    Restore This Config
+</button>
+{% endblock %}
+
+{% block content %}
+<div class="config-meta">
+    <div class="meta-item">
+        <span class="meta-label">Hash</span>
+        <code>{{ config.config_hash }}</code>
+    </div>
+    <div class="meta-item">
+        <span class="meta-label">Size</span>
+        <span>{{ config.config_size | format_bytes }}</span>
+    </div>
+    <div class="meta-item">
+        <span class="meta-label">Type</span>
+        <span class="type-badge {{ config.change_type }}">{{ config.change_type }}</span>
+    </div>
+    <div class="meta-item">
+        <span class="meta-label">Timestamp</span>
+        <span>{{ config.timestamp }}</span>
+    </div>
+</div>
+
+<div class="config-viewer" id="config-viewer">
+    <div class="config-toolbar">
+        <span class="config-filename">{{ router.name }}_{{ config.timestamp }}.cfg</span>
+        <button class="btn btn-outline btn-xs" onclick="copyConfig()" id="btn-copy-config">Copy</button>
+    </div>
+    <pre class="config-content"><code id="config-text">{{ config.config_text }}</code></pre>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function copyConfig() {
+    const text = document.getElementById('config-text').textContent;
+    navigator.clipboard.writeText(text).then(() => {
+        const btn = document.getElementById('btn-copy-config');
+        btn.textContent = 'Copied!';
+        setTimeout(() => { btn.textContent = 'Copy'; }, 2000);
+    });
+}
+</script>
+{% endblock %}

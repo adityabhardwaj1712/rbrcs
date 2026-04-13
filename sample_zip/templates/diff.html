@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}Config Diff{% endblock %}
+{% block page_title %}Configuration Diff{% endblock %}
+{% block page_subtitle %}Comparing Config #{{ config_a.id }} ↔ #{{ config_b.id }}{% endblock %}
+
+{% block content %}
+<div class="diff-header">
+    <div class="diff-meta">
+        <div class="diff-side old">
+            <strong>Config #{{ config_a.id }}</strong>
+            <span>{{ config_a.timestamp }}</span>
+            <code>{{ config_a.config_hash[:12] }}…</code>
+        </div>
+        <div class="diff-arrow">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="5" y1="12" x2="19" y2="12"/>
+                <polyline points="12 5 19 12 12 19"/>
+            </svg>
+        </div>
+        <div class="diff-side new">
+            <strong>Config #{{ config_b.id }}</strong>
+            <span>{{ config_b.timestamp }}</span>
+            <code>{{ config_b.config_hash[:12] }}…</code>
+        </div>
+    </div>
+</div>
+
+<div class="diff-container" id="diff-container">
+    <pre class="diff-content"><code>{% for line in diff_lines %}{% if line.startswith('---') or line.startswith('+++') %}<span class="diff-file">{{ line }}</span>
+{% elif line.startswith('@@') %}<span class="diff-hunk">{{ line }}</span>
+{% elif line.startswith('+') %}<span class="diff-add">{{ line }}</span>
+{% elif line.startswith('-') %}<span class="diff-del">{{ line }}</span>
+{% else %}<span class="diff-ctx">{{ line }}</span>
+{% endif %}{% endfor %}</code></pre>
+</div>
+
+{% if not diff_lines %}
+<div class="empty-state">
+    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+        <circle cx="12" cy="12" r="10"/>
+        <line x1="15" y1="9" x2="9" y2="15"/>
+        <line x1="9" y1="9" x2="15" y2="15"/>
+    </svg>
+    <p>No differences found — these configs are identical.</p>
+</div>
+{% endif %}
+{% endblock %}

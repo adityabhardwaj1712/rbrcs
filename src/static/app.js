@@ -317,6 +317,33 @@ document.getElementById('add-router-form')?.addEventListener('submit', async (e)
   }
 });
 
+async function testConnection() {
+  const payload = {
+    id: document.getElementById('ar-id').value.trim() || 'test-temp',
+    host: document.getElementById('ar-host').value.trim(),
+    port: parseInt(document.getElementById('ar-port').value) || 22,
+    device_type: document.getElementById('ar-type').value,
+    username: document.getElementById('ar-user').value.trim() || 'admin',
+    password: document.getElementById('ar-pass').value || '',
+    enable_password: document.getElementById('ar-enable').value || ''
+  };
+
+  if (!payload.host) { showToast('Host/IP is required to test!', 'error'); return; }
+
+  showToast('Testing connection...', 'info');
+  try {
+    const res = await apiFetch('/api/routers/test', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    if (res.success) showToast('✅ Connection successful!', 'success');
+    else showToast('❌ Failed: ' + res.message, 'error');
+  } catch (err) {
+    showToast('Test failed: ' + err.message, 'error');
+  }
+}
+
 // ── Mass Import ────────────────────────────────────────────
 
 function downloadCsvTemplate() {

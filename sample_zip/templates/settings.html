@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% block title %}Settings{% endblock %}
+{% block page_title %}Settings{% endblock %}
+{% block page_subtitle %}Edit system configuration — changes are saved immediately{% endblock %}
+
+{% block top_actions %}
+<a href="/setup" class="btn btn-secondary" style="display:inline-flex;align-items:center;gap:6px;text-decoration:none;padding:8px 16px;border-radius:8px;border:1px solid var(--border,#2a2a3e);color:var(--text-muted,#888);font-size:0.85rem;">Setup Wizard</a>
+{% endblock %}
+
+{% block content %}
+<style>
+.settings-grid{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+.settings-card{background:var(--card-bg,#1e1e2e);border:1px solid var(--border,#2a2a3e);border-radius:12px;padding:24px}
+.settings-card.full-width{grid-column:1/-1}
+.settings-card h3{margin:0 0 16px;font-size:.9rem;font-weight:600;color:var(--accent-blue,#4e9eff)}
+.settings-row{display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--border,#2a2a3e);gap:16px}
+.settings-row:last-child{border-bottom:none}
+.settings-row label{font-size:.82rem;color:var(--text-muted,#888);flex-shrink:0;min-width:140px}
+.settings-row input,.settings-row select{background:var(--input-bg,#12121c);border:1px solid var(--border,#2a2a3e);border-radius:6px;padding:6px 10px;color:var(--text,#e0e0e0);font-size:.82rem;flex:1;outline:none}
+.settings-row input:focus,.settings-row select:focus{border-color:var(--accent-blue,#4e9eff)}
+.settings-row code{font-size:.78rem;color:var(--text-muted,#888);font-family:monospace}
+.btn-save-s{margin-top:16px;background:var(--accent-blue,#4e9eff);border:none;color:#fff;border-radius:8px;padding:10px 24px;cursor:pointer;font-size:.85rem;font-weight:600;display:inline-flex;align-items:center;gap:8px}
+.save-msg{margin-top:12px;font-size:.82rem;display:none;padding:8px 12px;border-radius:6px}
+.save-msg.ok{background:rgba(40,167,69,.15);color:#5cb85c}
+.save-msg.fail{background:rgba(220,53,69,.15);color:#e07070}
+</style>
+
+<div class="settings-grid">
+  <div class="settings-card">
+    <h3>Health Check &amp; Backup</h3>
+    <div class="settings-row"><label>Check interval (min)</label><input type="number" id="cfg-interval" value="{{ config.health_check.interval_minutes }}" min="1" max="60"></div>
+    <div class="settings-row"><label>Backup interval (min)</label><input type="number" id="cfg-backup-interval" value="{{ config.health_check.backup_interval_minutes }}" min="5" max="1440"></div>
+    <div class="settings-row"><label>Ping timeout (sec)</label><input type="number" id="cfg-ping-timeout" value="{{ config.health_check.ping_timeout_seconds }}" min="1" max="30"></div>
+  </div>
+  <div class="settings-card">
+    <h3>Backup Retention</h3>
+    <div class="settings-row"><label>Keep latest N</label><input type="number" id="cfg-keep-latest" value="{{ config.retention.keep_latest }}" min="3" max="100"></div>
+    <div class="settings-row"><label>Daily keep (days)</label><code>{{ config.retention.daily_keep_days }} days</code></div>
+    <div class="settings-row"><label>Cleanup hour</label><code>{{ config.retention.cleanup_hour }}:00 UTC</code></div>
+  </div>
+  <div class="settings-card">
+    <h3>System</h3>
+    <div class="settings-row"><label>Database path</label><code>{{ config.system.db_path }}</code></div>
+    <div class="settings-row"><label>Log level</label><code>{{ config.system.log_level }}</code></div>
+  </div>
+  <div class="settings-card">
+    <h3>Alerts / Webhook</h3>
+    <div class="settings-row" style="flex-direction:column;align-items:flex-start;gap:8px">
+      <label>Webhook URL</label>
+      <input type="text" id="cfg-webhook" value="{{ config.alerts.webhook_url or '' }}" placeholder="Telegram / Slack / Discord URL" style="width:100%">
+    </div>
+  </div>
+  <div class="settings-card full-width">
+    <h3>Configured Routers</h3>
+    {% for router in config.routers %}
+    <div class="settings-row">
+      <label>{{ router.name }}</label>
+      <code>{{ router.device_type }} — {{ router.host }}:{{ router.port }} — {{ router.username }}</code>
+      <a href="/router/{{ router.id }}" style="color:var(--accent-blue,#4e9eff);font-size:.8rem;text-decoration:none;margin-left:12px">View →</a>
+    </div>
+    {% else %}
+    <p style="color:var(--text-muted,#888);font-size:.85rem">No routers yet. <a href="/setup" style="color:var(--accent-blue,#4e9eff)">Run setup wizard →</a></p>
+    {% endfor %}
+    <div style="margin-top:14px"><a href="/router/add" class="btn-save-s" style="text-decoration:none">+ Add Router</a></div>
+  </div>
+</div>
+
+<button class="btn-save-s" onclick="saveSettings()">Save Settings</button>
+<div class="save-msg" id="save-msg"></div>
+
+<script>
+async function saveSettings(){
+  const msg=document.getElementById('save-msg');
+  try{
+    const r=await fetch('/api/setup/save',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({
+        interval_minutes:document.getElementById('cfg-interval').value,
+        backup_interval_minutes:document.getElementById('cfg-backup-interval').value,
+        ping_timeout_seconds:document.getElementById('cfg-ping-timeout').value,
+        keep_latest:document.getElementById('cfg-keep-latest').value,
+        webhook_url:document.getElementById('cfg-webhook').value,
+      })});
+    const d=await r.json();
+    msg.style.display='block';msg.className='save-msg '+(d.success?'ok':'fail');
+    msg.textContent=d.success?'✓ Settings saved.':'✗ '+d.message;
+  }catch(e){msg.style.display='block';msg.className='save-msg fail';msg.textContent='✗ '+e.message;}
+}
+</script>
+{% endblock %}

@@ -10,4 +10,6 @@ services:
     volumes:
       - ./data:/app/data
       - ./config.yaml:/app/config.yaml
+    environment:
+      - PYTHONUNBUFFERED=1
     restart: unless-stopped
